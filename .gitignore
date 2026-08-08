@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
+
+# Django
+*.log
+local_settings.py
+db.sqlite3
+test_db.sqlite3
+*.sqlite3
+media/
+staticfiles/
+
+# Environment
+.env
+.venv/
+venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Artifacts / secrets
+nul
+oauth_auth_url.txt
+oauth_auth_url_*.txt
+
+# Logs
+logs/*.log
+
+# Test
+.pytest_cache/
+.coverage
+htmlcov/
