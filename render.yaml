@@ -28,9 +28,7 @@ services:
     envVars:
       - fromGroup: atlas-ai-shared
       - key: DATABASE_URL
-        fromDatabase:
-          name: atlas-ai-db
-          property: connectionString
+        sync: false
       - key: REDIS_URL
         fromService:
           name: atlas-ai-redis
@@ -70,7 +68,3 @@ services:
     maxmemoryPolicy: allkeys-lru
     # Internal-only access (required field for Key Value)
     ipAllowList: []
-
-databases:
-  - name: atlas-ai-db
-    plan: free
