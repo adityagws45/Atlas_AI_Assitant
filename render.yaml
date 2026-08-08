@@ -1,15 +1,18 @@
-services:
-  - type: web
-    name: atlas-ai-web
-    runtime: python
-    plan: starter
-    buildCommand: pip install -r requirements/prod.txt && python manage.py migrate --noinput && python manage.py collectstatic --noinput
-    startCommand: gunicorn config.wsgi:application --bind 0.0.0.0:$PORT
+# Atlas AI — Render Blueprint
+# Architecture: Web (Django/OAuth) + Worker (Telegram polling, exactly 1 instance)
+# + PostgreSQL + Redis. Polling bot only (no scheduler worker, no webhook).
+
+envVarGroups:
+  - name: atlas-ai-shared
     envVars:
       - key: DJANGO_SETTINGS_MODULE
         value: config.settings.production
+      - key: DEBUG
+        value: "False"
       - key: SECRET_KEY
         generateValue: true
+      - key: ALLOWED_HOSTS
+        sync: false
       - key: DATABASE_URL
         fromDatabase:
           name: atlas-ai-db
@@ -23,22 +26,49 @@ services:
         sync: false
       - key: GEMINI_API_KEY
         sync: false
+      - key: GEMINI_MODEL
+        sync: false
+      - key: GEMINI_LIGHT_MODEL
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_WHISPER_MODEL
+        value: whisper-large-v3-turbo
       - key: FINNHUB_API_KEY
         sync: false
-      - key: TELEGRAM_WEBHOOK_URL
+      - key: GOOGLE_CLIENT_ID
         sync: false
-      - key: TELEGRAM_WEBHOOK_SECRET
-        generateValue: true
-    healthCheckPath: /health/
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: PUBLIC_BASE_URL
+        sync: false
+      - key: GOOGLE_REDIRECT_URI
+        sync: false
+      - key: FIELD_ENCRYPTION_KEY
+        sync: false
 
-  - type: worker
-    name: atlas-ai-scheduler
+services:
+  - type: web
+    name: atlas-ai-web
     runtime: python
     plan: starter
-    buildCommand: pip install -r requirements/prod.txt
-    startCommand: python manage.py run_scheduler
+    numInstances: 1
+    buildCommand: pip install -r requirements/prod.txt && python manage.py migrate --noinput && python manage.py collectstatic --noinput
+    startCommand: gunicorn config.wsgi:application --bind 0.0.0.0:$PORT
+    healthCheckPath: /health/
     envVars:
-      - fromGroup: atlas-ai-web
+      - fromGroup: atlas-ai-shared
+
+  - type: worker
+    name: atlas-ai-bot
+    runtime: python
+    plan: starter
+    # Exactly one Telegram polling process — never scale this worker.
+    numInstances: 1
+    buildCommand: pip install -r requirements/prod.txt
+    startCommand: python manage.py run_bot
+    envVars:
+      - fromGroup: atlas-ai-shared
 
   - type: redis
     name: atlas-ai-redis
