@@ -1,6 +1,7 @@
-# Atlas AI — Render Blueprint
-# Architecture: Web (Django/OAuth) + Worker (Telegram polling, exactly 1 instance)
-# + PostgreSQL + Redis. Polling bot only (no scheduler worker, no webhook).
+# Atlas AI — Render Blueprint ($0 / free tier)
+# Architecture: FREE Web (Django + Telegram HTTPS webhook + OAuth)
+# + FREE Postgres + FREE Redis/Key Value.
+# No Background Worker. Local polling remains: python manage.py run_bot
 
 envVarGroups:
   - name: atlas-ai-shared
@@ -24,6 +25,11 @@ envVarGroups:
           property: connectionString
       - key: TELEGRAM_BOT_TOKEN
         sync: false
+      # After deploy: https://<atlas-ai-web>.onrender.com/api/telegram/webhook/
+      - key: TELEGRAM_WEBHOOK_URL
+        sync: false
+      - key: TELEGRAM_WEBHOOK_SECRET
+        generateValue: true
       - key: GEMINI_API_KEY
         sync: false
       - key: GEMINI_MODEL
@@ -51,7 +57,7 @@ services:
   - type: web
     name: atlas-ai-web
     runtime: python
-    plan: starter
+    plan: free
     numInstances: 1
     buildCommand: pip install -r requirements/prod.txt && python manage.py migrate --noinput && python manage.py collectstatic --noinput
     startCommand: gunicorn config.wsgi:application --bind 0.0.0.0:$PORT
@@ -59,22 +65,11 @@ services:
     envVars:
       - fromGroup: atlas-ai-shared
 
-  - type: worker
-    name: atlas-ai-bot
-    runtime: python
-    plan: starter
-    # Exactly one Telegram polling process — never scale this worker.
-    numInstances: 1
-    buildCommand: pip install -r requirements/prod.txt
-    startCommand: python manage.py run_bot
-    envVars:
-      - fromGroup: atlas-ai-shared
-
   - type: redis
     name: atlas-ai-redis
-    plan: starter
+    plan: free
     maxmemoryPolicy: allkeys-lru
 
 databases:
   - name: atlas-ai-db
-    plan: starter
+    plan: free
