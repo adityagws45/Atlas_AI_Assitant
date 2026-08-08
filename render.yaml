@@ -1,7 +1,6 @@
 # Atlas AI — Render Blueprint ($0 / free tier)
-# Architecture: FREE Web (Django + Telegram HTTPS webhook + OAuth)
-# + FREE Postgres + FREE Redis/Key Value.
-# No Background Worker. Local polling remains: python manage.py run_bot
+# FREE only: web + Postgres + Key Value. No Background Worker.
+# Local polling remains available: python manage.py run_bot
 
 envVarGroups:
   - name: atlas-ai-shared
@@ -12,8 +11,22 @@ envVarGroups:
         value: "False"
       - key: SECRET_KEY
         generateValue: true
-      - key: ALLOWED_HOSTS
-        sync: false
+      - key: TELEGRAM_WEBHOOK_SECRET
+        generateValue: true
+      - key: GROQ_WHISPER_MODEL
+        value: whisper-large-v3-turbo
+
+services:
+  - type: web
+    name: atlas-ai-web
+    runtime: python
+    plan: free
+    numInstances: 1
+    buildCommand: pip install -r requirements/prod.txt && python manage.py migrate --noinput && python manage.py collectstatic --noinput
+    startCommand: gunicorn config.wsgi:application --bind 0.0.0.0:$PORT
+    healthCheckPath: /health/
+    envVars:
+      - fromGroup: atlas-ai-shared
       - key: DATABASE_URL
         fromDatabase:
           name: atlas-ai-db
@@ -21,15 +34,15 @@ envVarGroups:
       - key: REDIS_URL
         fromService:
           name: atlas-ai-redis
-          type: redis
+          type: keyvalue
           property: connectionString
+      - key: ALLOWED_HOSTS
+        sync: false
       - key: TELEGRAM_BOT_TOKEN
         sync: false
       # After deploy: https://<atlas-ai-web>.onrender.com/api/telegram/webhook/
       - key: TELEGRAM_WEBHOOK_URL
         sync: false
-      - key: TELEGRAM_WEBHOOK_SECRET
-        generateValue: true
       - key: GEMINI_API_KEY
         sync: false
       - key: GEMINI_MODEL
@@ -38,8 +51,6 @@ envVarGroups:
         sync: false
       - key: GROQ_API_KEY
         sync: false
-      - key: GROQ_WHISPER_MODEL
-        value: whisper-large-v3-turbo
       - key: FINNHUB_API_KEY
         sync: false
       - key: GOOGLE_CLIENT_ID
@@ -53,22 +64,12 @@ envVarGroups:
       - key: FIELD_ENCRYPTION_KEY
         sync: false
 
-services:
-  - type: web
-    name: atlas-ai-web
-    runtime: python
-    plan: free
-    numInstances: 1
-    buildCommand: pip install -r requirements/prod.txt && python manage.py migrate --noinput && python manage.py collectstatic --noinput
-    startCommand: gunicorn config.wsgi:application --bind 0.0.0.0:$PORT
-    healthCheckPath: /health/
-    envVars:
-      - fromGroup: atlas-ai-shared
-
-  - type: redis
+  - type: keyvalue
     name: atlas-ai-redis
     plan: free
     maxmemoryPolicy: allkeys-lru
+    # Internal-only access (required field for Key Value)
+    ipAllowList: []
 
 databases:
   - name: atlas-ai-db
