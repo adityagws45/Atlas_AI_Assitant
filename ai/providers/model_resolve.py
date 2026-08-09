@@ -8,22 +8,26 @@ from typing import Any
 logger = logging.getLogger("atlas.ai.model_resolve")
 
 # Preference order for production Flash when configured model is unusable.
+# Lite-first: free-tier ResourceExhausted is common on heavier Flash SKUs.
 PRODUCTION_FLASH_FALLBACKS = (
-    "gemini-3.5-flash",
-    "gemini-3.6-flash",
+    "gemini-flash-lite-latest",
+    "gemini-2.0-flash-lite",
+    "gemini-2.5-flash-lite",
     "gemini-flash-latest",
     "gemini-2.0-flash",
     "gemini-2.0-flash-001",
+    "gemini-3.5-flash",
+    "gemini-3.6-flash",
     # gemini-2.5-flash often listed but returns 404 for new API keys — keep last
     "gemini-2.5-flash",
 )
 
 LIGHT_FLASH_FALLBACKS = (
-    "gemini-3.5-flash-lite",
     "gemini-flash-lite-latest",
+    "gemini-2.0-flash-lite",
+    "gemini-3.5-flash-lite",
     "gemini-3.1-flash-lite",
     "gemini-2.5-flash-lite",
-    "gemini-2.0-flash-lite",
 )
 
 # Process-level cache: (api_key_suffix, configured, fallback_key) -> result

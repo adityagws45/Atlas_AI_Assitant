@@ -189,8 +189,13 @@ TELEGRAM_WEBHOOK_SECRET = env("TELEGRAM_WEBHOOK_SECRET", default="").strip()
 # AI
 # ---------------------------------------------------------------------------
 GEMINI_API_KEY = (env("GEMINI_API_KEY", default="") or "").strip()
-GEMINI_MODEL = (env("GEMINI_MODEL", default="gemini-3.5-flash") or "").strip()
-GEMINI_PRO_MODEL = (env("GEMINI_PRO_MODEL", default="gemini-3.5-flash") or "").strip()
+# Default to Flash-Lite: free-tier quotas exhaust quickly on heavier Flash models.
+GEMINI_MODEL = (
+    env("GEMINI_MODEL", default="gemini-flash-lite-latest") or ""
+).strip() or "gemini-flash-lite-latest"
+GEMINI_PRO_MODEL = (
+    env("GEMINI_PRO_MODEL", default="gemini-flash-lite-latest") or ""
+).strip() or "gemini-flash-lite-latest"
 GEMINI_LIGHT_MODEL = (
     env("GEMINI_LIGHT_MODEL", default=GEMINI_MODEL) or GEMINI_MODEL
 ).strip()

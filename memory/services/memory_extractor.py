@@ -51,7 +51,15 @@ class MemoryExtractor:
             return []
 
         try:
-            candidates = self._ask_model(user, user_message, assistant_message)
+            # Memory is best-effort — never burn full retry budget under free-tier quota.
+            prev_retries = getattr(self.provider, "max_retries", None)
+            if prev_retries is not None:
+                self.provider.max_retries = 1
+            try:
+                candidates = self._ask_model(user, user_message, assistant_message)
+            finally:
+                if prev_retries is not None:
+                    self.provider.max_retries = prev_retries
         except (ProviderConfigError, ProviderError) as exc:
             logger.warning("event=memory_extract_skipped err=%s", type(exc).__name__)
             return []

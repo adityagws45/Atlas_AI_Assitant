@@ -129,6 +129,15 @@ def test_detect_intents() -> None:
     assert detect_preference_intent("My briefing should arrive at 7:30.") == "briefing"
     assert detect_preference_intent("Tell me about Nvidia") is None
     assert detect_preference_intent("Why is NVDA moving today?") is None
+    assert detect_preference_intent("What is happening with Nvidia today?") is None
+    assert detect_preference_intent("Explain P/E ratio like I'm a beginner.") is None
+    assert (
+        detect_preference_intent(
+            "I'm a student. Give me a simple explanation of what the stock market is."
+        )
+        is None
+    )
+    assert detect_preference_intent("Compare Nvidia and AMD as AI-chip companies.") is None
     print("PASS detect_intents")
 
 
@@ -173,6 +182,57 @@ def test_returning_user_role_change() -> None:
     print("PASS returning_user_role_change")
 
 
+def test_research_not_stolen_during_focus_onboarding() -> None:
+    tid = 9600000307
+    User.objects.filter(telegram_id=tid).delete()
+    p = ConversationProcessor()
+    p.handle_start(telegram_id=tid, first_name="Tester", telegram_message_id=1)
+    user = User.objects.get(telegram_id=tid)
+    user.onboarding_step = "focus"
+    user.onboarding_completed = False
+    user.save()
+
+    class FakeOrch:
+        formatter = MagicMock()
+        formatter.format = lambda x: x
+
+        def process(self, user, conversation, text):
+            return {"reply": f"AI:{text}", "metadata": {"pipeline": "ai"}}
+
+    p.orchestrator = FakeOrch()
+    r = p.handle_text(
+        telegram_id=tid,
+        text="What is happening with Nvidia today?",
+        telegram_message_id=2,
+    )
+    user.refresh_from_db()
+    assert user.onboarding_completed, "research should soft-complete onboarding"
+    assert r.startswith("AI:"), r
+    assert "focused on semiconductors" not in r.lower()
+    print("PASS research_not_stolen_during_focus_onboarding")
+
+
+def test_student_explain_delegates_to_ai() -> None:
+    p, user = _fresh_user(9600000308)
+
+    class FakeOrch:
+        formatter = MagicMock()
+        formatter.format = lambda x: x
+
+        def process(self, user, conversation, text):
+            return {"reply": f"AI:{text}", "metadata": {"pipeline": "ai"}}
+
+    p.orchestrator = FakeOrch()
+    r = p.handle_text(
+        telegram_id=9600000308,
+        text="I'm a student. Give me a simple explanation of what the stock market is.",
+        telegram_message_id=20,
+    )
+    assert r.startswith("AI:"), r
+    assert "treat you as a student" not in r.lower()
+    print("PASS student_explain_delegates_to_ai")
+
+
 def main() -> None:
     test_clarification_ignores_role_statement()
     test_detect_intents()
@@ -182,6 +242,8 @@ def main() -> None:
     test_follow_semiconductors()
     test_onboarding_interruption_still_works()
     test_returning_user_role_change()
+    test_research_not_stolen_during_focus_onboarding()
+    test_student_explain_delegates_to_ai()
     print("\nALL INTENT ROUTING CHECKS PASSED")
 
 

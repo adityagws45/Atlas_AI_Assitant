@@ -140,10 +140,15 @@ BRIEFING_HINT = re.compile(
 )
 
 RESEARCH_HINT = re.compile(
-    r"\b(tell me about|what about|why is|why did|compare|summarize|"
+    r"\b("
+    r"tell me about|what about|why is|why did|compare|summarize|"
+    r"what(?:'s| is) happening|what(?:'s| is) going on|happening with|"
+    r"explain\b|simple explanation|like i(?:'m| am) a beginner|"
+    r"what is (?:a |an |the )?(?:p/?e|pe ratio|stock market|valuation)|"
     r"market[- ]moving|earnings for|earnings of|"
     r"what should i watch|tell me everything|"
-    r"research (?!analyst)\w+)\b",
+    r"research (?!analyst)\w+"
+    r")\b",
     re.IGNORECASE,
 )
 
@@ -647,10 +652,10 @@ class OnboardingService:
             }
 
         if self.is_in_progress(user):
-            step = user.onboarding_step or STEP_ROLE
+            # Clear research/tutoring asks must not be absorbed as focus/role answers
+            # on ANY step (including focus — "What is happening with Nvidia today?").
             if (
-                step in {STEP_BRIEFING, STEP_DEPTH, "more_names", "style_catchup"}
-                and RESEARCH_HINT.search(text)
+                RESEARCH_HINT.search(text)
                 and not is_skip(text)
                 and not BRIEFING_HINT.search(text)
             ):

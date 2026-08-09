@@ -21,9 +21,13 @@ from conversation.services.personalization import (
 from memory.models import UserPreference, Watchlist
 from notifications.models import NotificationPreference
 
-# Clear research asks — never treat these as preference updates
+# Clear research / tutoring asks — never treat these as preference updates
 RESEARCH_BLOCKLIST = re.compile(
-    r"\b(tell me about|what about|why is|why did|compare|summarize|"
+    r"\b("
+    r"tell me about|what about|why is|why did|compare|summarize|"
+    r"what(?:'s| is) happening|what(?:'s| is) going on|happening with|"
+    r"explain\b|simple explanation|like i(?:'m| am) a beginner|eli5|"
+    r"what is (?:a |an |the )?(?:p/?e|pe ratio|stock market|valuation|bull|bear)|"
     r"market[- ]moving|earnings for|earnings of|what should i watch|"
     r"tell me everything|stock price|how is .+ (doing|trading)|"
     r"latest news|pull up|look up|pay attention|what should i pay|"
@@ -41,6 +45,15 @@ RESEARCH_BLOCKLIST = re.compile(
     r"what does my day look like|meetings? (do i have )?today|"
     r"when am i free|schedule( a)? (meeting|review)|"
     r"connect( my)? (google )?calendar|any conflicts?"
+    r")\b",
+    re.IGNORECASE,
+)
+
+# Role/profile sentence that also asks a tutoring/research question
+EMBEDDED_RESEARCH_ASK = re.compile(
+    r"\b("
+    r"explain|simple explanation|what is|what(?:'s| is) happening|"
+    r"compare|tell me about|why is|teach me|like i(?:'m| am) a beginner"
     r")\b",
     re.IGNORECASE,
 )
@@ -137,6 +150,10 @@ def detect_preference_intent(text: str) -> str | None:
         if re.search(r"\b([01]?\d|2[0-3])(?::[0-5]\d)?\s*(am|pm)\b", lower):
             if any(p in lower for p in ("prefer", "want", "set", "change", "update", "my")):
                 return "briefing"
+
+    # "I'm a student. Explain the stock market." → research, not a role-only update
+    if ROLE_STATEMENT.search(raw) and EMBEDDED_RESEARCH_ASK.search(raw):
+        return None
 
     if ROLE_STATEMENT.search(raw):
         return "role"

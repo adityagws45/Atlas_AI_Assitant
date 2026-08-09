@@ -37,9 +37,9 @@ class GeminiProvider(BaseAIProvider):
         raw_key = api_key if api_key is not None else getattr(settings, "GEMINI_API_KEY", "")
         self.api_key = (raw_key or "").strip()
         configured_model = (
-            model if model is not None else getattr(settings, "GEMINI_MODEL", "gemini-3.5-flash")
+            model if model is not None else getattr(settings, "GEMINI_MODEL", "gemini-flash-lite-latest")
         )
-        self.model = (configured_model or "").strip() or "gemini-3.5-flash"
+        self.model = (configured_model or "").strip() or "gemini-flash-lite-latest"
         self._model_resolved = False
         self._model_switch_reason = ""
         self.timeout_seconds = float(
@@ -155,6 +155,7 @@ class GeminiProvider(BaseAIProvider):
         history, last_user = self._to_gemini_contents(messages)
         last_error: Exception | None = None
         attempts = max(1, self.max_retries)
+        rate_limit_switch_attempted = False
 
         for attempt in range(1, attempts + 1):
             started = time.monotonic()
@@ -242,6 +243,46 @@ class GeminiProvider(BaseAIProvider):
                             "event=gemini_model_recover_failed err=%s",
                             type(recover_exc).__name__,
                         )
+                # Quota pressure: switch to a lite model once, then stop hammering.
+                elif self._is_rate_limited(exc) and not rate_limit_switch_attempted:
+                    rate_limit_switch_attempted = True
+                    from ai.providers.model_resolve import (
+                        LIGHT_FLASH_FALLBACKS,
+                        mark_model_failed,
+                        resolve_model,
+                    )
+
+                    mark_model_failed(model_name)
+                    try:
+                        lite, switched, reason = resolve_model(
+                            genai,
+                            getattr(self, "light_model", "") or model_name,
+                            fallbacks=LIGHT_FLASH_FALLBACKS,
+                            smoke=False,
+                            api_key=self.api_key,
+                        )
+                        if lite and lite != model_name:
+                            model_name = lite
+                            self.model = lite
+                            self.light_model = lite
+                            logger.warning(
+                                "event=gemini_rate_limit_model_switch to=%s reason=%s switched=%s",
+                                lite,
+                                reason,
+                                switched,
+                            )
+                            retryable = True
+                        else:
+                            retryable = False
+                    except Exception as recover_exc:  # noqa: BLE001
+                        logger.warning(
+                            "event=gemini_rate_limit_switch_failed err=%s",
+                            type(recover_exc).__name__,
+                        )
+                        retryable = False
+                elif self._is_rate_limited(exc):
+                    # Already switched (or couldn't) — further retries worsen free-tier exhaustion.
+                    retryable = False
                 if not retryable:
                     break
             if attempt < attempts:
