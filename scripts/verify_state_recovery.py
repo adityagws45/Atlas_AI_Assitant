@@ -96,12 +96,19 @@ def test_ai_exception_recovery() -> None:
         raise ProviderRetryExhausted("simulated")
 
     p.orchestrator.ai_service.generate_turn = boom  # type: ignore[method-assign]
-    # Force past clarification
-    r = p.handle_text(
-        telegram_id=tid,
-        text="Why is Nvidia moving today?",
-        telegram_message_id=20,
-    )
+    # Force past clarification; disable fast paths so we hit the AI recovery path
+    with patch(
+        "conversation.services.market_fast_path.try_market_move_fast_answer",
+        return_value=None,
+    ), patch(
+        "conversation.services.finance_fast_path.try_finance_fast_answer",
+        return_value=None,
+    ):
+        r = p.handle_text(
+            telegram_id=tid,
+            text="Why is Nvidia moving today?",
+            telegram_message_id=20,
+        )
     assert (
         "trouble pulling" in r.lower()
         or "try again" in r.lower()
@@ -132,7 +139,16 @@ def test_finance_exception_recovery() -> None:
             raise RuntimeError("FinanceService exploded")
 
     p.orchestrator = FakeOrch()  # type: ignore[assignment]
-    r = p.handle_text(telegram_id=tid, text="Why is NVDA moving?", telegram_message_id=30)
+    with patch(
+        "conversation.services.market_fast_path.try_market_move_fast_answer",
+        return_value=None,
+    ), patch(
+        "conversation.services.finance_fast_path.try_finance_fast_answer",
+        return_value=None,
+    ):
+        r = p.handle_text(
+            telegram_id=tid, text="Why is NVDA moving?", telegram_message_id=30
+        )
     # Processor catches and returns FRIENDLY_ERROR
     assert "trouble" in r.lower() or "moment" in r.lower() or "try again" in r.lower()
     assert "research brain" not in r.lower()

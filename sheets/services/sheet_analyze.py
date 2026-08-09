@@ -154,21 +154,23 @@ class SheetAnalyzer:
             findings.get("kind") == "financials"
             or any(k in q for k in ("revenue", "income", "metric", "2023", "2024", "2025", "fy"))
         ):
-            return self._format_financials(findings, title, question=q)
+            return self._strip_essay(self._format_financials(findings, title, question=q))
 
         # Narrow modes: lead with the asked question, not a full dump
         if focus == "best" or (mode == "best"):
             if findings.get("metric_improvements"):
-                return self._format_financials(findings, title, question=q or "improved")
-            return self._format_performers(findings, title, winners=True)
+                return self._strip_essay(
+                    self._format_financials(findings, title, question=q or "improved")
+                )
+            return self._strip_essay(self._format_performers(findings, title, winners=True))
         if focus == "worst" or mode == "worst":
-            return self._format_performers(findings, title, winners=False)
+            return self._strip_essay(self._format_performers(findings, title, winners=False))
         if focus == "risks":
-            return self._format_risks_only(findings, title)
+            return self._strip_essay(self._format_risks_only(findings, title))
         if focus == "recs":
-            return self._format_recs_only(findings, title)
+            return self._strip_essay(self._format_recs_only(findings, title))
         if focus == "trends" or "changed" in q:
-            return self._format_trends(findings, title)
+            return self._strip_essay(self._format_trends(findings, title))
 
         lines: list[str] = []
         lines.append(f"*Summary*\nHere's my read on *{title}*")
@@ -259,7 +261,28 @@ class SheetAnalyzer:
         for r in recs[:4]:
             lines.append(f"• {r}")
 
-        return "\n".join(lines)
+        return self._strip_essay("\n".join(lines))
+
+    @staticmethod
+    def _strip_essay(text: str) -> str:
+        """Drop canned report sections from deterministic sheet replies."""
+        import re
+
+        out = text or ""
+        out = re.sub(
+            r"\n\*Why It Matters\*[\s\S]*?(?=\n\*|\Z)",
+            "",
+            out,
+            flags=re.IGNORECASE,
+        )
+        out = re.sub(
+            r"\n\*Recommended Next Steps\*[\s\S]*",
+            "",
+            out,
+            flags=re.IGNORECASE,
+        )
+        out = re.sub(r"\n{3,}", "\n\n", out)
+        return out.strip()
 
     def _format_performers(self, findings: dict, title: str, *, winners: bool) -> str:
         rows = findings.get("best") if winners else findings.get("worst")

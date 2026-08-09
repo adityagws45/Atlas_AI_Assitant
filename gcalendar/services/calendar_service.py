@@ -12,6 +12,10 @@ from django.utils import timezone as dj_tz
 
 from accounts.models import GoogleService, User
 from accounts.services.google_oauth_service import GoogleOAuthService
+from telegram_bot.adapters.oauth_ux import (
+    google_access_required_reply,
+    google_connected_prefix,
+)
 from core.crypto import encrypt_text
 from gcalendar.models import (
     CalendarConnectionMode,
@@ -271,10 +275,9 @@ class CalendarService:
                     "handled": True,
                     "needs_oauth": True,
                     "auth_url": auth_url,
-                    "reply": (
-                        "📅 I need access to your Google Calendar to check your schedule.\n\n"
-                        "Tap *Connect Google* below (or open this link):\n"
-                        f"{auth_url}"
+                    "reply": google_access_required_reply(
+                        auth_url,
+                        purpose="Connect Google to check your Calendar.",
                     ),
                 }
             return {
@@ -352,7 +355,7 @@ class CalendarService:
 
         synced = self.sync_range(user)
         question = self.memory.pop_pending_question(user)
-        prefix = "✅ Google Calendar connected. Let me check your schedule.\n\n"
+        prefix = google_connected_prefix(action="Checking today's schedule…")
         if not synced.get("ok"):
             # Verified scopes but sync failed — do NOT claim success with empty data
             fail = self._handle_sync_failure(user, synced, question=question or "")

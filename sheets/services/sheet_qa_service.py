@@ -19,13 +19,14 @@ Rules (strict):
 - Answer the user's natural-language question directly and clearly.
 - You may calculate totals, averages, rankings, growth %, comparisons, and
   simple statistics when the numbers exist in the sheet.
-- If the sheet does not contain enough information to answer, reply with EXACTLY:
-  I couldn't find that information in the spreadsheet.
+- If a requested column/metric (e.g. "score") does not exist, say so briefly and
+  mention what metrics ARE available.
+- Only reply with exactly "I couldn't find that information in the spreadsheet."
+  when the sheet is empty or truly has no relevant numbers for the ask.
 - Do NOT invent companies, metrics, years, or figures that are not in the data.
-- Do NOT use general market knowledge, demo portfolios, or AI Watchlist data.
-- Do NOT mention embeddings, tools, OAuth, or internal systems.
-- Keep the reply Telegram-friendly: concise, readable, light structure.
-- Prefer short paragraphs or bullets when listing multiple items.
+- Do NOT use general market knowledge or append stock-market tutorials.
+- Do NOT use essay headings (Bottom Line, Why It Matters, Student Lens, etc.).
+- Keep the reply Telegram-friendly: concise, short bullets when listing.
 """.strip()
 
 _MISSING = "I couldn't find that information in the spreadsheet."
@@ -50,6 +51,13 @@ class SheetQAService:
         q = (question or "").strip()
         if not q:
             return {"ok": False, "reply": "What would you like to know about the spreadsheet?"}
+
+        # Prefer Python arithmetic for avg / max / min / YoY before Gemini.
+        det = self._try_deterministic(
+            question=q, title=title, values_by_sheet=values_by_sheet, findings=findings
+        )
+        if det:
+            return {"ok": True, "reply": det, "source": "deterministic_calc"}
 
         context = self._build_context(title=title, values_by_sheet=values_by_sheet, findings=findings)
         prompt = (
@@ -77,6 +85,106 @@ class SheetQAService:
                 question=q, title=title, values_by_sheet=values_by_sheet, findings=findings
             )
             return {"ok": True, "reply": fallback, "source": "deterministic_fallback"}
+
+    def _try_deterministic(
+        self,
+        *,
+        question: str,
+        title: str,
+        values_by_sheet: dict[str, list[list[Any]]],
+        findings: dict[str, Any] | None,
+    ) -> str | None:
+        from sheets.services.sheet_analyze import SheetAnalyzer
+
+        q = question.lower()
+        analyzer = SheetAnalyzer()
+        findings = findings or analyzer.analyze(
+            title=title,
+            values_by_sheet=values_by_sheet,
+            content_hash="qa-det",
+            question=question,
+            mode="summary",
+        )
+        metrics = findings.get("metrics") or []
+        by_name = {str(m.get("name") or "").lower(): m for m in metrics}
+
+        # Explicit missing-column probes (e.g. "average score" on a P&L sheet)
+        if re.search(r"\b(score|grades?|gpa)\b", q) and not any(
+            "score" in n or "grade" in n for n in by_name
+        ):
+            available = ", ".join(m.get("name") or "" for m in metrics[:8]) or "none detected"
+            return (
+                "There's no score column in this spreadsheet. "
+                f"Available metrics: {available}."
+            )
+
+        def _pick(*names: str):
+            for n in names:
+                if n in by_name:
+                    return by_name[n]
+            for key, m in by_name.items():
+                if any(n in key for n in names):
+                    return m
+            return None
+
+        target = None
+        label = None
+        if "revenue" in q or "sales" in q:
+            target = _pick("revenue", "total revenue", "net sales", "sales")
+            label = "Revenue"
+        elif "gross profit" in q:
+            target = _pick("gross profit")
+            label = "Gross Profit"
+        elif "operating income" in q or "operating profit" in q:
+            target = _pick("operating income", "operating profit")
+            label = "Operating Income"
+        elif "net income" in q or "profit" in q:
+            target = _pick("net income", "net profit")
+            label = "Net Income"
+        elif "eps" in q:
+            target = _pick("diluted eps", "eps", "earnings per share")
+            label = "EPS"
+
+        if not target or not target.get("series"):
+            # Expense / analyze without a clear metric → leave to Gemini/fallback
+            if re.search(r"\b(average|avg|mean|highest|lowest|max|min|which year)\b", q):
+                # try first numeric metric if question is generic average
+                if metrics and re.search(r"\b(average|avg|mean)\b", q) and not label:
+                    return None
+            return None
+
+        series: dict[str, float] = dict(target["series"])
+        years = sorted(series.keys())
+        vals = [series[y] for y in years]
+        if not vals:
+            return None
+
+        if re.search(r"\b(average|avg|mean)\b", q):
+            avg = sum(vals) / len(vals)
+            return (
+                f"Average {label.lower()} across {years[0]}–{years[-1]} "
+                f"is *{analyzer._fmt_money(avg)}* "
+                f"({len(vals)} years)."
+            )
+        if re.search(r"\b(yoy|year[- ]over[- ]year|growth)\b", q) and len(years) >= 2:
+            y0, y1 = years[-2], years[-1]
+            v0, v1 = series[y0], series[y1]
+            if v0 and abs(v0) > 1e-9:
+                pct = 100.0 * (v1 - v0) / abs(v0)
+                return (
+                    f"{label} grew *{pct:+.1f}%* from {y0} to {y1} "
+                    f"(*{analyzer._fmt_money(v0)}* → *{analyzer._fmt_money(v1)}*)."
+                )
+        if re.search(r"\b(highest|max|largest|peak)\b", q):
+            y = max(years, key=lambda yy: series[yy])
+            return f"{label} peaked in *{y}* at *{analyzer._fmt_money(series[y])}*."
+        if re.search(r"\b(lowest|min|smallest)\b", q):
+            y = min(years, key=lambda yy: series[yy])
+            return f"{label} was lowest in *{y}* at *{analyzer._fmt_money(series[y])}*."
+        if re.search(r"\b(which year|what year)\b", q) and "high" in q:
+            y = max(years, key=lambda yy: series[yy])
+            return f"*{y}* — {label.lower()} *{analyzer._fmt_money(series[y])}*."
+        return None
 
     def _build_context(
         self,

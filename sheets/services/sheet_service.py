@@ -18,6 +18,7 @@ from sheets.services.sheet_detect import detect_workbook
 from sheets.services.sheet_intent import SheetIntent, detect_sheet_intent
 from sheets.services.sheet_memory import SheetMemory
 from sheets.services.sheet_qa_service import SheetQAService
+from telegram_bot.adapters.oauth_ux import google_access_required_reply
 
 logger = logging.getLogger("atlas.sheets.service")
 
@@ -145,12 +146,9 @@ class SheetService:
                     "needs_oauth": True,
                     "auth_url": auth_url,
                     "error_code": reason,
-                    "reply": (
-                        "📊 I found your Google Sheet. Connect Google to let Atlas read it.\n\n"
-                        "Tap *Connect Google* below (or open this link):\n"
-                        f"{auth_url}\n\n"
-                        "After you authorize, return here — I'll open *this* spreadsheet "
-                        "(not a demo portfolio)."
+                    "reply": google_access_required_reply(
+                        auth_url,
+                        purpose="Connect Google so I can read this spreadsheet.",
                     ),
                 }
             return {
@@ -307,11 +305,9 @@ class SheetService:
                     "ok": True,
                     "handled": True,
                     "auth_url": auth_url,
-                    "reply": (
-                        "📊 Connect Google to let Atlas read your spreadsheets.\n\n"
-                        "Tap *Connect Google* below (or open this link):\n"
-                        f"{auth_url}\n\n"
-                        "After authorizing, paste a Sheets URL or say “show my spreadsheets.”"
+                    "reply": google_access_required_reply(
+                        auth_url,
+                        purpose="Connect Google to read your spreadsheets.",
                     ),
                 }
         self.connect_demo(user)

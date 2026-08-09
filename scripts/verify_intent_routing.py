@@ -200,11 +200,19 @@ def test_research_not_stolen_during_focus_onboarding() -> None:
             return {"reply": f"AI:{text}", "metadata": {"pipeline": "ai"}}
 
     p.orchestrator = FakeOrch()
-    r = p.handle_text(
-        telegram_id=tid,
-        text="What is happening with Nvidia today?",
-        telegram_message_id=2,
-    )
+    # Bypass live finance fast-paths so this test isolates onboarding→AI routing.
+    with patch(
+        "conversation.services.market_fast_path.try_market_move_fast_answer",
+        return_value=None,
+    ), patch(
+        "conversation.services.finance_fast_path.try_finance_fast_answer",
+        return_value=None,
+    ):
+        r = p.handle_text(
+            telegram_id=tid,
+            text="What is happening with Nvidia today?",
+            telegram_message_id=2,
+        )
     user.refresh_from_db()
     assert user.onboarding_completed, "research should soft-complete onboarding"
     assert r.startswith("AI:"), r

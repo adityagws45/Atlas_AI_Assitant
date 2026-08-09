@@ -83,9 +83,35 @@ def extract_google_oauth_url(text: str) -> str | None:
     return m.group(0) if m else None
 
 
+def scrub_oauth_urls_for_display(text: str) -> str:
+    """Remove raw Google OAuth URLs from user-visible text (keep button only)."""
+    if not text:
+        return text
+    out = text
+    out = re.sub(
+        r"\[Connect Google\]\(https://accounts\.google\.com/o/oauth2/[^)\s]+\)",
+        "Connect Google",
+        out,
+        flags=re.IGNORECASE,
+    )
+    out = _OAUTH_URL_RE.sub("", out)
+    out = re.sub(
+        r"(?i)\(?\s*or open this link:?\s*\)?",
+        "",
+        out,
+    )
+    out = re.sub(r"(?i)open this link to authorize[^\n]*\n?", "", out)
+    out = re.sub(r"[ \t]+\n", "\n", out)
+    out = re.sub(r"\n{3,}", "\n\n", out)
+    cleaned = out.strip()
+    if cleaned and "connect google" not in cleaned.lower():
+        cleaned = cleaned.rstrip() + "\n\nTap *Connect Google* below."
+    return cleaned
+
+
 def _oauth_keyboard(auth_url: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
-        [[InlineKeyboardButton("Connect Google", url=auth_url)]]
+        [[InlineKeyboardButton("🔗 Connect Google", url=auth_url)]]
     )
 
 
@@ -147,8 +173,11 @@ class TelegramAdapter:
         context: ContextTypes.DEFAULT_TYPE | None = None,
     ) -> list[TgMessage]:
         sent: list[TgMessage] = []
-        prepared = prepare_telegram_markdown(text or "")
-        auth_url = extract_google_oauth_url(text or "")
+        raw = text or ""
+        auth_url = extract_google_oauth_url(raw)
+        # Never show giant OAuth URLs in the chat — button carries the URL.
+        display = scrub_oauth_urls_for_display(raw) if auth_url else raw
+        prepared = prepare_telegram_markdown(display)
         keyboard = _oauth_keyboard(auth_url) if auth_url else None
         chunks = split_message(prepared)
         for i, chunk in enumerate(chunks):

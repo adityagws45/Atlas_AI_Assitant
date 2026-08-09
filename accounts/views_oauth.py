@@ -20,14 +20,30 @@ def _notify_telegram(telegram_id: int | None, text: str) -> None:
     if not token or not telegram_id:
         return
     try:
+        from telegram_bot.adapters.telegram_adapter import (
+            extract_google_oauth_url,
+            prepare_telegram_markdown,
+            scrub_oauth_urls_for_display,
+        )
+
+        auth_url = extract_google_oauth_url(text or "")
+        body = scrub_oauth_urls_for_display(text or "") if auth_url else (text or "")
+        body = prepare_telegram_markdown(body)
+        payload: dict = {
+            "chat_id": int(telegram_id),
+            "text": body,
+            "parse_mode": "Markdown",
+            "disable_web_page_preview": True,
+        }
+        if auth_url:
+            payload["reply_markup"] = {
+                "inline_keyboard": [
+                    [{"text": "🔗 Connect Google", "url": auth_url}]
+                ]
+            }
         httpx.post(
             f"https://api.telegram.org/bot{token}/sendMessage",
-            json={
-                "chat_id": int(telegram_id),
-                "text": text,
-                "parse_mode": "Markdown",
-                "disable_web_page_preview": True,
-            },
+            json=payload,
             timeout=15,
         )
     except Exception:  # noqa: BLE001
@@ -115,9 +131,10 @@ def google_oauth_callback(request):
             except Exception:  # noqa: BLE001
                 logger.warning("event=oauth_sheets_catalog_sync_failed", exc_info=True)
             telegram_note = opened.get("reply") or (
-                "✅ Google connected. I've opened your spreadsheet. "
-                "What would you like me to analyze?"
+                "Google connected ✓\nI've opened your spreadsheet."
             )
+            if not str(telegram_note).lower().startswith("google connected"):
+                telegram_note = "Google connected ✓\n" + str(telegram_note)
             msg = (
                 "Google Sheets is linked. Return to Telegram — Atlas will use "
                 "the spreadsheet you shared."
@@ -185,15 +202,18 @@ def google_oauth_callback(request):
                 )
         elif user:
             from drive.models import DriveConnectionMode
+            from drive.services.drive_service import DriveService
             from drive.services.drive_sync import DriveSyncService
 
             sync = DriveSyncService()
             state_row = sync.ensure_state(user)
             state_row.mode = DriveConnectionMode.OAUTH
             state_row.save(update_fields=["mode", "updated_at"])
-            sync.full_sync(user)
+            resumed = DriveService().resume_after_oauth(user)
             msg = "Google Drive is linked. Return to Telegram and ask Atlas about your files."
-            telegram_note = "✅ Google Drive connected. Ask me about your files."
+            telegram_note = resumed.get("reply") or (
+                "Google connected ✓\nAsk me about your files."
+            )
         else:
             msg = "Connected. Return to Telegram."
     except Exception:  # noqa: BLE001

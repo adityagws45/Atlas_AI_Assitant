@@ -15,6 +15,7 @@ logger = logging.getLogger("atlas.documents.memory")
 
 ACTIVE_KEY = "active_documents"
 RECENT_KEY = "recent_documents"
+PENDING_Q_KEY = "pending_document_question"
 
 
 class DocumentMemory:
@@ -85,6 +86,30 @@ class DocumentMemory:
                 }
             )
         return out
+
+    def remember_pending_question(self, user: User, text: str) -> None:
+        self._set(
+            user,
+            PENDING_Q_KEY,
+            {"question": (text or "")[:500]},
+            memory_type=MemoryType.CONTEXT,
+        )
+
+    def pop_pending_question(self, user: User) -> str:
+        data = self._get(user, PENDING_Q_KEY) or {}
+        AssistantMemory.objects.filter(user=user, key=PENDING_Q_KEY).delete()
+        return str(data.get("question") or "")
+
+    def processing_document_ids(self, user: User) -> list[str]:
+        return [
+            str(x)
+            for x in FinancialDocument.objects.filter(
+                user=user,
+                processing_status=ProcessingStatus.PROCESSING,
+            )
+            .order_by("-created_at")
+            .values_list("id", flat=True)[:3]
+        ]
 
     def clear_focus(self, user: User) -> None:
         AssistantMemory.objects.filter(user=user, key=ACTIVE_KEY).delete()

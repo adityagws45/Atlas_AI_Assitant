@@ -151,7 +151,23 @@ class ConversationProcessor:
                 return reply
 
             self.doc_memory.remember_upload(user, doc)
-            reply = _document_ready_reply(doc)
+            # Answer a question queued while the PDF was still processing
+            pending_q = self.doc_memory.pop_pending_question(user)
+            if pending_q and is_document_question(pending_q):
+                qa = self.doc_qa.answer(
+                    user,
+                    pending_q,
+                    document_ids=[str(doc.id)],
+                    compare=False,
+                )
+                if qa.get("ok") and qa.get("reply"):
+                    reply = self.orchestrator.formatter.format(
+                        "Document ready.\n\n" + str(qa["reply"])
+                    )
+                else:
+                    reply = _document_ready_reply(doc)
+            else:
+                reply = _document_ready_reply(doc)
             MessageService.save_assistant_message(
                 conversation,
                 reply,
@@ -159,7 +175,16 @@ class ConversationProcessor:
                     "pipeline": "document_upload",
                     "ok": True,
                     "document_id": str(doc.id),
+                    "answered_pending": bool(pending_q),
                 },
+            )
+            from conversation.services.entity_context import EntityContext
+
+            EntityContext().remember(
+                user,
+                document_id=str(doc.id),
+                company=(doc.company or "") or None,
+                topic="document",
             )
             logger.info(
                 "event=document_upload_ok telegram_id=%s doc_id=%s",
@@ -376,6 +401,7 @@ class ConversationProcessor:
                     "pipeline": "drive",
                     "ok": bool(drive_result.get("ok")),
                     "drive_intent": drive_intent.kind,
+                    "needs_oauth": bool(drive_result.get("needs_oauth")),
                 }
                 if (
                     drive_intent.kind == "import"
@@ -410,33 +436,127 @@ class ConversationProcessor:
 
             metadata = {"onboarding": result.get("onboarding", False)}
             if result.get("delegate_to_ai"):
-                active_ids = self.doc_memory.active_document_ids(user)
-                if active_ids and (
+                from conversation.services.entity_context import EntityContext
+                from conversation.services.finance_fast_path import (
+                    try_finance_fast_answer,
+                )
+                from conversation.services.market_fast_path import (
+                    try_market_move_fast_answer,
+                )
+                from finance.utils.ticker_resolve import resolve_symbol, resolve_symbols
+
+                entities = EntityContext()
+                # If a PDF is still processing, queue the question
+                if self.doc_memory.processing_document_ids(user) and (
                     is_document_question(text)
                     or is_document_compare(text)
                     or _looks_like_doc_followup(text)
                 ):
-                    qa = self.doc_qa.answer(
-                        user,
-                        text,
-                        document_ids=active_ids,
-                        compare=is_document_compare(text),
-                    )
-                    reply = self.orchestrator.formatter.format(
-                        qa.get("reply")
-                        or "I couldn't pull a clean take from the report."
+                    self.doc_memory.remember_pending_question(user, text)
+                    reply = (
+                        "Still processing the report — I'll answer as soon as it's ready."
                     )
                     metadata.update(
-                        {
-                            "pipeline": "document_qa",
-                            "ok": bool(qa.get("ok")),
-                            "document_ids": qa.get("document_ids") or active_ids,
-                        }
+                        {"pipeline": "document_pending", "ok": True, "queued": True}
                     )
                 else:
-                    ai_result = self.orchestrator.process(user, conversation, text)
-                    reply = ai_result["reply"]
-                    metadata.update(ai_result.get("metadata") or {})
+                    active_ids = self.doc_memory.active_document_ids(user)
+                    if active_ids and (
+                        is_document_question(text)
+                        or is_document_compare(text)
+                        or _looks_like_doc_followup(text)
+                    ):
+                        qa = self.doc_qa.answer(
+                            user,
+                            text,
+                            document_ids=active_ids,
+                            compare=is_document_compare(text),
+                        )
+                        reply = self.orchestrator.formatter.format(
+                            qa.get("reply")
+                            or "I couldn't pull a clean take from the report."
+                        )
+                        metadata.update(
+                            {
+                                "pipeline": "document_qa",
+                                "ok": bool(qa.get("ok")),
+                                "document_ids": qa.get("document_ids") or active_ids,
+                            }
+                        )
+                        entities.remember(
+                            user,
+                            document_id=str(active_ids[0]),
+                            topic="document",
+                        )
+                    else:
+                        default_sym = entities.resolve_symbol(user, text)
+                        clarified = False
+                        if (
+                            default_sym is None
+                            and re.search(
+                                r"\b(its|it'?s|their|the company|the stock)\b",
+                                text,
+                                re.IGNORECASE,
+                            )
+                            and not resolve_symbol(text)
+                        ):
+                            amb = entities.ambiguity_prompt(user)
+                            if amb:
+                                reply = amb
+                                metadata.update(
+                                    {"pipeline": "entity_clarify", "ok": True}
+                                )
+                                clarified = True
+
+                        if not clarified:
+                            market = try_market_move_fast_answer(
+                                text, default_symbol=default_sym
+                            )
+                            if market:
+                                reply = self.orchestrator.formatter.format(
+                                    market["reply"]
+                                )
+                                metadata.update(market.get("metadata") or {})
+                                sym = (market.get("metadata") or {}).get("symbol")
+                                if sym:
+                                    entities.remember(
+                                        user, symbol=str(sym), topic="market"
+                                    )
+                            else:
+                                fast = try_finance_fast_answer(
+                                    text, default_symbol=default_sym
+                                )
+                                if fast:
+                                    reply = self.orchestrator.formatter.format(
+                                        fast["reply"]
+                                    )
+                                    metadata.update(fast.get("metadata") or {})
+                                    sym = (fast.get("metadata") or {}).get("symbol")
+                                    if sym:
+                                        entities.remember(
+                                            user, symbol=str(sym), topic="finance"
+                                        )
+                                else:
+                                    ai_result = self.orchestrator.process(
+                                        user, conversation, text
+                                    )
+                                    reply = ai_result["reply"]
+                                    metadata.update(ai_result.get("metadata") or {})
+                                    named = resolve_symbols(text) or []
+                                    one = resolve_symbol(text)
+                                    if not named and one:
+                                        named = [one]
+                                    if len(named) >= 2:
+                                        entities.remember(
+                                            user,
+                                            symbol=named[0],
+                                            alt_symbols=named[1:],
+                                            topic="compare",
+                                        )
+                                    elif named:
+                                        entities.remember(
+                                            user, symbol=named[0], topic="research"
+                                        )
             else:
                 reply = self.orchestrator.formatter.format(result.get("reply") or "")
 
@@ -498,29 +618,10 @@ def _document_ready_reply(doc) -> str:
     if pages:
         overview.append(f"• Pages: {pages}")
 
-    areas = meta.get("key_areas") or meta.get("sections") or []
-    if isinstance(areas, str):
-        areas = [areas]
-    if areas:
-        shown = ", ".join(str(a) for a in areas[:6])
-        area_line = f"\n\nKey areas identified: {shown}."
-    else:
-        area_line = (
-            "\n\nKey areas identified: revenue, profitability, risks, "
-            "business segments, and financial position."
-        )
-
     return (
-        "📄 *Document Ready*\n\n"
-        "I've processed the financial report and I'm ready to answer questions about it.\n\n"
-        "*Quick overview*\n"
+        "📄 *Document ready*\n"
         + "\n".join(overview)
-        + area_line
-        + "\n\nYou can now ask questions such as:\n"
-        "• What was the revenue?\n"
-        "• What are the biggest risks?\n"
-        "• Summarize the report.\n"
-        "• Which section discusses profitability?"
+        + "\n\nAsk me anything about it — revenue, risks, strategy, or a short summary."
     )
 
 

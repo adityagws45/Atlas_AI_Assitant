@@ -10,6 +10,10 @@ from django.utils import timezone
 
 from accounts.models import GoogleService, User
 from accounts.services.google_oauth_service import GoogleOAuthService
+from telegram_bot.adapters.oauth_ux import (
+    google_access_required_reply,
+    google_connected_prefix,
+)
 from core.crypto import encrypt_text
 from documents.models import DocumentSource
 from documents.services.document_pipeline import DocumentPipeline
@@ -140,10 +144,9 @@ class GmailService:
                     "handled": True,
                     "needs_oauth": True,
                     "auth_url": auth_url,
-                    "reply": (
-                        "I need access to your Gmail (read-only) to check your inbox.\n\n"
-                        "Tap *Connect Google* below (or open this link):\n"
-                        f"{auth_url}"
+                    "reply": google_access_required_reply(
+                        auth_url,
+                        purpose="Connect Google to check Gmail.",
                     ),
                 }
             return {
@@ -258,7 +261,7 @@ class GmailService:
         state.save(update_fields=["mode", "error_message", "updated_at"])
 
         question = self.memory.pop_pending_question(user)
-        prefix = "Gmail connected. Let me check your inbox.\n\n"
+        prefix = google_connected_prefix(action="Checking your inbox…")
         synced = self.sync_inbox(user)
         if not synced.get("ok"):
             if question:

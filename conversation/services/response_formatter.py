@@ -43,7 +43,10 @@ BANNED_HEADINGS = re.compile(
     r"^\s*[\*_]*(?:the\s+)?(?:"
     r"bottom line|financial snapshot|student (?:lens|note)|market position|"
     r"here'?s what you need to know|key takeaways?|in summary|in conclusion|"
-    r"executive summary|the takeaway"
+    r"executive summary|the takeaway|quick primer(?: on(?: the)? stock market)?|"
+    r"the stock market\s*\([^)]*\)|stock market\s*\(simplified\)|"
+    r"why it matters|recommended next steps|key findings|"
+    r"want a deeper dive"
     r")[\*_:]*\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
@@ -51,9 +54,21 @@ BANNED_HEADINGS = re.compile(
 BANNED_CLOSERS = re.compile(
     r"(?:\n|^)\s*(?:would you like(?: me to)?[^.?\n]*[.?]|"
     r"do you want(?: me to)?[^.?\n]*[.?]|"
+    r"want a deeper dive[^.?\n]*[.?]?|"
     r"anything else\??|"
     r"let me know if you (?:need|want|have)[^.?\n]*[.?]|"
     r"happy to dig deeper[^.?\n]*[.?])\s*$",
+    re.IGNORECASE,
+)
+
+# Drop appended stock-market tutorials that often follow a real answer
+_STOCK_MARKET_PRIMER = re.compile(
+    r"(?:\n{1,2})"
+    r"(?:\s*[\*_]*\s*(?:quick primer on (?:the )?stock market|"
+    r"the stock market\s*\([^)]*\)|"
+    r"stock market\s*\(simplified\))"
+    r"[\*_:]*\s*\n)?"
+    r"(?:the stock market is essentially[\s\S]*)$",
     re.IGNORECASE,
 )
 
@@ -118,6 +133,7 @@ class ResponseFormatter:
                     cleaned = nxt
                     changed = True
 
+        cleaned = _STOCK_MARKET_PRIMER.sub("", cleaned)
         cleaned = BANNED_HEADINGS.sub("", cleaned)
         cleaned = BANNED_CLOSERS.sub("", cleaned)
         # Role/memory announcements mid-reply
@@ -128,6 +144,11 @@ class ResponseFormatter:
         )
         cleaned = re.sub(
             r"(?i)\bsince you asked earlier[^.!\n]*[.!]?\s*",
+            "",
+            cleaned,
+        )
+        cleaned = re.sub(
+            r"(?i)\bbased on what you(?:'ve| have) told me[^.!\n]*[.!]?\s*",
             "",
             cleaned,
         )

@@ -294,7 +294,7 @@ async def handle_photo_or_document(
     # UX: never leave the user hanging — acknowledge immediately, then process.
     await _safe_reply(
         update,
-        "📄 Financial report received.\nI'm analyzing the document now…",
+        "Got it — processing the report.",
         context,
     )
     try:

@@ -235,12 +235,22 @@ class FinanceService:
         symbol = self._require_symbol(symbol_or_name)
         if isinstance(symbol, FinanceResult):
             return symbol
-        profile = self.get_profile(symbol)
-        quote = self.get_quote(symbol)
-        metrics = self.get_metrics(symbol)
-        earnings = self.get_earnings(symbol, limit=3)
-        news = self.get_news(symbol, limit=4)
-        ratings = self.get_analyst_ratings(symbol)
+
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            f_profile = pool.submit(self.get_profile, symbol)
+            f_quote = pool.submit(self.get_quote, symbol)
+            f_metrics = pool.submit(self.get_metrics, symbol)
+            f_earnings = pool.submit(self.get_earnings, symbol, limit=3)
+            f_news = pool.submit(self.get_news, symbol, limit=4)
+            f_ratings = pool.submit(self.get_analyst_ratings, symbol)
+            profile = f_profile.result()
+            quote = f_quote.result()
+            metrics = f_metrics.result()
+            earnings = f_earnings.result()
+            news = f_news.result()
+            ratings = f_ratings.result()
         if not any([profile.ok, quote.ok, metrics.ok]):
             return FinanceResult(
                 ok=False,
