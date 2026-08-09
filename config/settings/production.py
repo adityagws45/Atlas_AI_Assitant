@@ -33,21 +33,30 @@ if _redis_url:
         # Keep LocMem — do not fail production boot when Key Value is absent.
         pass
 
-# Production OAuth callback must be HTTPS on the deployed host — never localhost.
+# ---------------------------------------------------------------------------
+# Google OAuth redirect — MUST be HTTPS on the public host.
+# Render env often still has localhost from .env.example; that causes
+# Error 400: redirect_uri_mismatch. Always force a production URI here.
+# ---------------------------------------------------------------------------
+_PROD_OAUTH_CALLBACK = (
+    "https://atlas-ai-assitant.onrender.com/api/oauth/google/callback/"
+)
 _redirect = (GOOGLE_REDIRECT_URI or "").strip()  # noqa: F405
-if not _redirect or "localhost" in _redirect or "127.0.0.1" in _redirect:
-    _pub = (PUBLIC_BASE_URL or "").strip()  # noqa: F405
-    if _pub.startswith("https://"):
-        GOOGLE_REDIRECT_URI = f"{_pub.rstrip('/')}/api/oauth/google/callback/"
-    else:
-        # Known production host fallback (must also be registered in Google Cloud).
-        _hosts = ALLOWED_HOSTS if isinstance(ALLOWED_HOSTS, (list, tuple)) else []  # noqa: F405
-        if any("atlas-ai-assitant.onrender.com" in str(h) for h in _hosts):
-            GOOGLE_REDIRECT_URI = (
-                "https://atlas-ai-assitant.onrender.com/api/oauth/google/callback/"
-            )
-        else:
-            raise RuntimeError(
-                "Production requires GOOGLE_REDIRECT_URI or PUBLIC_BASE_URL as HTTPS "
-                "(not localhost). Register the same URI in Google Cloud OAuth credentials."
-            )
+_pub = (PUBLIC_BASE_URL or "").strip().rstrip("/")  # noqa: F405
+
+if _pub.startswith("https://"):
+    GOOGLE_REDIRECT_URI = f"{_pub}/api/oauth/google/callback/"
+elif (
+    not _redirect
+    or "localhost" in _redirect
+    or "127.0.0.1" in _redirect
+    or not _redirect.startswith("https://")
+):
+    GOOGLE_REDIRECT_URI = _PROD_OAUTH_CALLBACK
+else:
+    # Explicit HTTPS redirect from env — keep it, normalize trailing slash.
+    GOOGLE_REDIRECT_URI = _redirect if _redirect.endswith("/") else f"{_redirect}/"
+
+# Keep PUBLIC_BASE_URL aligned so auth URL builders / absolute links stay consistent.
+if not _pub.startswith("https://"):
+    PUBLIC_BASE_URL = "https://atlas-ai-assitant.onrender.com"
