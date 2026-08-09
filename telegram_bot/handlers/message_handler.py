@@ -15,7 +15,7 @@ from ai.services.voice_transcription import (
     VoiceTranscriptionService,
     user_facing_voice_error,
 )
-from telegram_bot.adapters.telegram_adapter import TelegramAdapter
+from telegram_bot.adapters.telegram_adapter import TelegramAdapter, strip_telegram_markup
 from telegram_bot.services.conversation_processor import ConversationProcessor
 
 logger = logging.getLogger("atlas.telegram.handlers")
@@ -53,13 +53,24 @@ def _transcribe_sync(**kwargs):
 async def _safe_reply(update: Update, text: str, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message:
         return
+    body = (text or "").strip() or (
+        "I'm having trouble with that right now. Try again in a moment."
+    )
     try:
-        await TelegramAdapter.reply_text(update.message, text, context=context)
+        await TelegramAdapter.reply_text(update.message, body, context=context)
     except TelegramError:
         logger.exception(
             "event=telegram_send_failed chat_id=%s",
             getattr(update.effective_chat, "id", None),
         )
+        # Last-resort plain send so the user is never left with silence
+        try:
+            await update.message.reply_text(
+                strip_telegram_markup(body),
+                parse_mode=None,
+            )
+        except Exception:
+            logger.exception("event=telegram_send_plain_failed")
 
 
 async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

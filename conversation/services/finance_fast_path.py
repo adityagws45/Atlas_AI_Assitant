@@ -99,7 +99,7 @@ def try_finance_fast_answer(
             if not formatted:
                 return None
             reply = (
-                f"{name} (*{symbol}*) is around *{formatted}* in market cap right now."
+                f"{name} ({symbol}) is around {formatted} in market cap right now."
             )
             tool = "company_profile"
         elif want_pe:

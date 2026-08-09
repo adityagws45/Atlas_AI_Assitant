@@ -572,7 +572,7 @@ class ConversationProcessor:
                 bool(result.get("delegate_to_ai")),
                 len(text),
             )
-            return reply
+            return (reply or "").strip() or FRIENDLY_ERROR
         except OperationalError:
             logger.exception("event=text_db_error telegram_id=%s", telegram_id)
             return FRIENDLY_ERROR
