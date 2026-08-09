@@ -182,6 +182,9 @@ CACHE_TTL_DRIVE_META = env.int("CACHE_TTL_DRIVE_META", default=300)
 # Telegram
 # ---------------------------------------------------------------------------
 TELEGRAM_BOT_TOKEN = env("TELEGRAM_BOT_TOKEN", default="").strip()
+TELEGRAM_BOT_USERNAME = (
+    env("TELEGRAM_BOT_USERNAME", default="atlas_ai_financial_bot") or "atlas_ai_financial_bot"
+).strip().lstrip("@")
 TELEGRAM_WEBHOOK_URL = env("TELEGRAM_WEBHOOK_URL", default="").strip()
 TELEGRAM_WEBHOOK_SECRET = env("TELEGRAM_WEBHOOK_SECRET", default="").strip()
 
