@@ -35,13 +35,11 @@ from tools.router import ToolRouter
 logger = logging.getLogger("atlas.ai.service")
 
 FRIENDLY_AI_UNAVAILABLE = (
-    "I'm having trouble reaching my research brain right now. "
-    "Give me a moment and try again — your notes are still saved."
+    "I'm having trouble pulling that data right now. Try again in a moment."
 )
 
 FRIENDLY_PLAN_FALLBACK = (
-    "Let me pull the latest on that — one moment.\n\n"
-    "If this stalls, rephrase with a ticker (e.g. NVDA) and I'll dig in."
+    "Let me pull the latest on that — rephrase with a ticker (e.g. NVDA) if this stalls."
 )
 
 

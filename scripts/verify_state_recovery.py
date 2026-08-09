@@ -59,7 +59,7 @@ def test_live_script_no_ai_on_prefs() -> None:
         text="I mainly follow AI, semiconductors and cloud computing.",
         telegram_message_id=10,
     )
-    assert "research brain" not in r1.lower()
+    assert "research brain" not in r1.lower() and "glitched" not in r1.lower()
     assert "AI" in r1 or "semiconductor" in r1.lower() or "cloud" in r1.lower()
     assert calls["n"] == 0, "sector update invoked AI"
 
@@ -68,12 +68,12 @@ def test_live_script_no_ai_on_prefs() -> None:
         text="I invest for the long term.",
         telegram_message_id=11,
     )
-    assert "research brain" not in r2.lower()
+    assert "research brain" not in r2.lower() and "glitched" not in r2.lower()
     assert "long-term" in r2.lower() or "long" in r2.lower()
     assert calls["n"] == 0, "style update invoked AI"
 
     r3 = p.handle_text(telegram_id=tid, text="8:00 AM", telegram_message_id=12)
-    assert "research brain" not in r3.lower()
+    assert "research brain" not in r3.lower() and "glitched" not in r3.lower()
     assert "08:00" in r3 or "8:00" in r3 or "Locked" in r3
     assert calls["n"] == 0, "briefing update invoked AI"
     prefs = UserPreference.objects.get(user__telegram_id=tid)
@@ -82,7 +82,7 @@ def test_live_script_no_ai_on_prefs() -> None:
 
     # Research: clarification short-circuit — still no Gemini needed
     r4 = p.handle_text(telegram_id=tid, text="Tell me about Nvidia.", telegram_message_id=13)
-    assert "research brain" not in r4.lower()
+    assert "research brain" not in r4.lower() and "glitched" not in r4.lower()
     assert "Nvidia" in r4 or "NVDA" in r4 or "angle" in r4.lower()
     assert calls["n"] == 1  # orchestrator called, but clarification path
     print("PASS live_script_prefs")
@@ -102,7 +102,13 @@ def test_ai_exception_recovery() -> None:
         text="Why is Nvidia moving today?",
         telegram_message_id=20,
     )
-    assert "research brain" in r.lower() or "moment" in r.lower()
+    assert (
+        "trouble pulling" in r.lower()
+        or "try again" in r.lower()
+        or "moment" in r.lower()
+    )
+    assert "research brain" not in r.lower()
+    assert "gemini" not in r.lower()
 
     # Next preference must still work (state not poisoned)
     r2 = p.handle_text(
@@ -128,7 +134,9 @@ def test_finance_exception_recovery() -> None:
     p.orchestrator = FakeOrch()  # type: ignore[assignment]
     r = p.handle_text(telegram_id=tid, text="Why is NVDA moving?", telegram_message_id=30)
     # Processor catches and returns FRIENDLY_ERROR
-    assert "glitched" in r.lower() or "moment" in r.lower()
+    assert "trouble" in r.lower() or "moment" in r.lower() or "try again" in r.lower()
+    assert "research brain" not in r.lower()
+    assert "glitched" not in r.lower()
 
     # Restore real orchestrator via new processor path for prefs
     p2 = ConversationProcessor()

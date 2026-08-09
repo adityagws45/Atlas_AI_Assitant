@@ -333,8 +333,8 @@ def main() -> None:
     test_gemini_not_replaced()
     print("\nVOICE_VERIFICATION: PASS")
     print(
-        "Architecture: Voice → whisper-large-v3-turbo → ConversationProcessor → "
-        "existing routing → Atlas answer (not transcription echo)."
+        "Architecture: Voice -> whisper-large-v3-turbo -> ConversationProcessor -> "
+        "existing routing -> Atlas answer (not transcription echo)."
     )
 
 

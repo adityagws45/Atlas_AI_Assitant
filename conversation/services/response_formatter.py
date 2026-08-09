@@ -23,6 +23,9 @@ PROVIDER_LEAKS = (
     r"\bvector search\b",
     r"\bchunk(?:s|ing)?\b",
     r"\bretrieval\b",
+    r"\bresearch brain\b",
+    r"\bgemini\b",
+    r"\bprovider error\b",
 )
 
 ID_LEAKS = (
@@ -33,6 +36,25 @@ ID_LEAKS = (
     r"\bcalendar_id\b",
     r"\btool_request\b",
     r"\boauthlib\b",
+)
+
+# Essay / ChatGPT-style section labels the model sometimes invents
+BANNED_HEADINGS = re.compile(
+    r"^\s*[\*_]*(?:the\s+)?(?:"
+    r"bottom line|financial snapshot|student (?:lens|note)|market position|"
+    r"here'?s what you need to know|key takeaways?|in summary|in conclusion|"
+    r"executive summary|the takeaway"
+    r")[\*_:]*\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+BANNED_CLOSERS = re.compile(
+    r"(?:\n|^)\s*(?:would you like(?: me to)?[^.?\n]*[.?]|"
+    r"do you want(?: me to)?[^.?\n]*[.?]|"
+    r"anything else\??|"
+    r"let me know if you (?:need|want|have)[^.?\n]*[.?]|"
+    r"happy to dig deeper[^.?\n]*[.?])\s*$",
+    re.IGNORECASE,
 )
 
 # Never run leak scrubbers inside absolute URLs — they previously turned
@@ -57,7 +79,7 @@ class ResponseFormatter:
             salvaged = public_answer_from_payload(payload)
             cleaned = salvaged or (
                 "Let me pull the latest on that. "
-                "If this doesn't resolve, rephrase with a ticker and I'll dig in."
+                "Rephrase with a ticker if this doesn't resolve."
             )
 
         cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
@@ -77,10 +99,39 @@ class ResponseFormatter:
             r"^(no problem[!.,]?\s*)",
             r"^(happy to help[!.,]?\s*)",
             r"^(hope this helps[!.,]?\s*)",
+            r"^(let'?s dive in[!.,]?\s*)",
+            r"^(here'?s a simple explanation[:.\s]*)",
+            r"^(think of (?:it|this) as[:.\s]*)",
+            r"^(perfect[!.,]?\s*)",
+            r"^(let me explain[:.\s]*)",
+            r"^(since you asked earlier[^.]*\.\s*)",
+            r"^(because you(?:'re| are) a student[^.]*\.\s*)",
             r"^(let me know if you (need|have|want)[^.]*\.\s*)",
         )
-        for pattern in banned_openers:
-            cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE).lstrip()
+        # Peel stacked filler openers (Absolutely! Great question! …)
+        changed = True
+        while changed:
+            changed = False
+            for pattern in banned_openers:
+                nxt = re.sub(pattern, "", cleaned, flags=re.IGNORECASE).lstrip()
+                if nxt != cleaned:
+                    cleaned = nxt
+                    changed = True
+
+        cleaned = BANNED_HEADINGS.sub("", cleaned)
+        cleaned = BANNED_CLOSERS.sub("", cleaned)
+        # Role/memory announcements mid-reply
+        cleaned = re.sub(
+            r"(?i)\bbecause you(?:'re| are) a student[^.!\n]*[.!]?\s*",
+            "",
+            cleaned,
+        )
+        cleaned = re.sub(
+            r"(?i)\bsince you asked earlier[^.!\n]*[.!]?\s*",
+            "",
+            cleaned,
+        )
+        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
 
         urls: list[str] = []
 
@@ -101,12 +152,13 @@ class ResponseFormatter:
         for i, url in enumerate(urls):
             cleaned = cleaned.replace(_URL_PLACEHOLDER.format(i), url)
 
-        # Soft-trim extreme walls; TelegramAdapter still splits long messages
-        if len(cleaned) > 3200:
-            cut = cleaned[:3000]
+        # Soft-trim only extreme walls; TelegramAdapter still splits long messages.
+        # Keep headroom so "deep dive" / "full report" answers are not silently gutted.
+        if len(cleaned) > 3500:
+            cut = cleaned[:3200]
             last_break = max(cut.rfind("\n\n"), cut.rfind("\n"))
             if last_break > 2000:
                 cut = cut[:last_break]
-            cleaned = cut.rstrip() + "\n\nAsk if you want me to go deeper on any point."
+            cleaned = cut.rstrip()
 
         return cleaned.strip()

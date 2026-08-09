@@ -28,7 +28,7 @@ from sheets.services.sheet_service import SheetService
 logger = logging.getLogger("atlas.telegram.processor")
 
 FRIENDLY_ERROR = (
-    "Something glitched on my side. Give me a moment and try again — "
+    "I'm having trouble pulling that right now. Try again in a moment — "
     "or send /start if you want a fresh intro."
 )
 

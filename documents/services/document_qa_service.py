@@ -309,9 +309,7 @@ class DocumentQAService:
         lines.extend(
             [
                 "",
-                "*Why It Matters*\nThese sections frame the operating reality and risk surface for the thesis.",
-                "",
-                "*Bottom Line*\nAsk again in a moment for a fuller take, or narrow to risks, revenue, "
+                "Ask again in a moment for a fuller take, or narrow to risks, revenue, "
                 "AI strategy, or guidance.",
             ]
         )

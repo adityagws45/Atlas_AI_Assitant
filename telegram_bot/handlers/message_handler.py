@@ -78,7 +78,7 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         logger.exception("event=handler_start_error telegram_id=%s", update.effective_user.id)
         await _safe_reply(
             update,
-            "Something glitched on my side. Try /start once more in a few seconds.",
+            "I'm having trouble with /start right now. Try once more in a few seconds.",
             context,
         )
 
@@ -128,7 +128,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         logger.exception("event=handler_text_error telegram_id=%s", update.effective_user.id)
         await _safe_reply(
             update,
-            "Something glitched on my side. Try again in a moment.",
+            "I'm having trouble with that right now. Try again in a moment.",
             context,
         )
 
@@ -250,8 +250,7 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
         logger.exception("event=handler_voice_error telegram_id=%s", telegram_id)
         await _safe_reply(
             update,
-            "🎙️ Something glitched while handling that voice note. "
-            "Please try again or type your question.",
+            "🎙️ Had trouble with that voice note. Try again or send the question as text.",
             context,
         )
 
