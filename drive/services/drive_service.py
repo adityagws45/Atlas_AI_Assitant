@@ -63,7 +63,9 @@ class DriveService:
                     "auth_url": url,
                     "reply": google_access_required_reply(
                         url,
-                        purpose="Connect Google to search Drive and open files.",
+                        purpose=(
+                            "Connect Google once for Calendar, Gmail, Drive, and Sheets."
+                        ),
                     ),
                 }
             # Fall through to demo if misconfigured mid-flight

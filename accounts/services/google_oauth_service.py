@@ -26,6 +26,17 @@ DRIVE_SCOPES = [
     "openid",
 ]
 
+# One Connect Google = Calendar + Gmail + Drive + Sheets. Never re-prompt per surface.
+UNIFIED_GOOGLE_SCOPES = [
+    "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/calendar.readonly",
+    "https://www.googleapis.com/auth/calendar.events",
+    "https://www.googleapis.com/auth/drive.readonly",
+    "https://www.googleapis.com/auth/spreadsheets.readonly",
+    "https://www.googleapis.com/auth/userinfo.email",
+    "openid",
+]
+
 # Canonical Google API scopes — never allow truncated hosts like https://www..com/...
 _REQUIRED_SCOPE_HOST = "https://www.googleapis.com/auth/"
 _SHEETS_MIN_SCOPES = [
@@ -53,6 +64,12 @@ _SERVICE_REQUIRED_SCOPE_ANY = {
         "https://www.googleapis.com/auth/gmail.readonly",
     },
 }
+_ALL_ATLAS_SERVICES = (
+    GoogleService.GMAIL,
+    GoogleService.CALENDAR,
+    GoogleService.DRIVE,
+    GoogleService.SHEETS,
+)
 
 
 def normalize_oauth_scopes(scopes: list[str] | None) -> list[str]:
@@ -114,10 +131,10 @@ class GoogleOAuthService:
                 ),
             }
         state = secrets.token_urlsafe(24)
+        # Always request the full Atlas Google bundle — connecting Calendar must also
+        # unlock Gmail / Drive / Sheets so the bot never asks again per feature.
         try:
-            scopes = normalize_oauth_scopes(
-                list(getattr(settings, "GOOGLE_OAUTH_SCOPES", {}).get(service, DRIVE_SCOPES))
-            )
+            scopes = normalize_oauth_scopes(list(UNIFIED_GOOGLE_SCOPES))
         except ValueError as exc:
             logger.error("event=oauth_scope_invalid err=%s", exc)
             return {
@@ -125,31 +142,19 @@ class GoogleOAuthService:
                 "error_code": "oauth_scope_invalid",
                 "error": "Google authorization scopes are misconfigured on the server.",
             }
-        if service == GoogleService.SHEETS:
-            for required in _SHEETS_MIN_SCOPES:
-                if required not in scopes:
-                    scopes.append(required)
-        if service == GoogleService.CALENDAR:
-            for required in _CALENDAR_MIN_SCOPES:
-                if required not in scopes:
-                    scopes.append(required)
-            # Keep events scope if already configured (proposal/draft support)
-            events_scope = "https://www.googleapis.com/auth/calendar.events"
-            if events_scope not in scopes:
-                configured = list(
-                    getattr(settings, "GOOGLE_OAUTH_SCOPES", {}).get(service, [])
-                )
-                if events_scope in configured:
-                    scopes.append(events_scope)
-        if service == GoogleService.GMAIL:
-            gmail_scope = "https://www.googleapis.com/auth/gmail.readonly"
-            if gmail_scope not in scopes:
-                scopes.append(gmail_scope)
+        for required in _SHEETS_MIN_SCOPES + _CALENDAR_MIN_SCOPES:
+            if required not in scopes:
+                scopes.append(required)
+        gmail_scope = "https://www.googleapis.com/auth/gmail.readonly"
+        if gmail_scope not in scopes:
+            scopes.append(gmail_scope)
+        events_scope = "https://www.googleapis.com/auth/calendar.events"
+        if events_scope not in scopes:
+            scopes.append(events_scope)
 
         try:
             flow = self._build_flow(scopes=scopes, state=state)
-            # prompt=consent forces refresh token + shows Calendar permission even when
-            # Sheets was previously authorized (incremental auth).
+            # prompt=consent ensures refresh token + every Atlas scope is shown once.
             auth_url, returned_state = flow.authorization_url(
                 access_type="offline",
                 prompt="consent",
@@ -251,34 +256,31 @@ class GoogleOAuthService:
                 "service": service,
                 "actual_scopes": actual_scopes,
                 "error": (
-                    "Google connected, but the required Calendar permission was not granted. "
-                    "Please tap Connect Google again and allow Calendar access."
-                    if service == GoogleService.CALENDAR
-                    else (
-                        "Google connected, but the required permission was not granted. "
-                        "Please tap Connect Google again and allow access."
-                    )
+                    "Google connected, but the required permission was not granted. "
+                    "Please tap Connect Google again and allow all requested access "
+                    "(Calendar, Gmail, Drive, and Sheets)."
                 ),
             }
 
-        self._persist_tokens(user, service=service, tokens=tokens)
+        saved_services = self._persist_tokens_for_all_covered(
+            user, tokens=tokens, actual_scopes=actual_scopes
+        )
         return {
             "ok": True,
             "telegram_id": user.telegram_id,
             "user_id": str(user.id),
             "service": service,
             "scopes": actual_scopes,
+            "saved_services": saved_services,
             "pending_spreadsheet_id": payload.get("pending_spreadsheet_id") or "",
             "pending_action": payload.get("pending_action") or "",
             "message": "Google is connected. You can return to Telegram.",
         }
 
     def get_valid_access_token(self, user: User, *, service: str = GoogleService.DRIVE) -> str | None:
-        integ = (
-            GoogleIntegration.objects.filter(user=user, service=service, is_active=True)
-            .order_by("-updated_at")
-            .first()
-        )
+        integ = self._integration_for_service(user, service)
+        if not integ:
+            integ = self._adopt_token_from_sibling(user, service)
         if not integ:
             return None
         access = decrypt_text(integ.access_token_encrypted)
@@ -320,14 +322,17 @@ class GoogleOAuthService:
                 integ.is_active = False
                 integ.save(update_fields=["is_active", "updated_at"])
                 return None
-            self._persist_tokens(user, service=service, tokens=tokens, existing=integ)
+            # Refresh updates every Atlas service that these scopes still cover
+            self._persist_tokens_for_all_covered(
+                user,
+                tokens=tokens,
+                actual_scopes=[s for s in str(tokens.get("scope") or "").split() if s],
+            )
             access = tokens.get("access_token") or ""
         return access or None
 
     def is_connected(self, user: User, *, service: str = GoogleService.DRIVE) -> bool:
-        return GoogleIntegration.objects.filter(
-            user=user, service=service, is_active=True
-        ).exists()
+        return self.get_valid_access_token(user, service=service) is not None
 
     def disconnect(self, user: User, *, service: str = GoogleService.DRIVE) -> None:
         GoogleIntegration.objects.filter(user=user, service=service).update(is_active=False)
@@ -482,24 +487,96 @@ class GoogleOAuthService:
         return sorted(required_any)
 
     def token_has_required_scopes(self, user: User, *, service: str) -> bool:
-        integ = (
-            GoogleIntegration.objects.filter(user=user, service=service, is_active=True)
-            .order_by("-updated_at")
-            .first()
-        )
+        integ = self._integration_for_service(user, service)
+        if not integ:
+            integ = self._find_sibling_with_scopes(user, service)
         if not integ:
             return False
         access = decrypt_text(integ.access_token_encrypted)
         if not access or str(access).startswith("demo:"):
             return False
-        actual = self._resolve_actual_scopes(
-            {"access_token": access, "scope": " ".join(integ.scopes or [])}
-        )
-        # Keep DB in sync with reality
-        if actual and list(integ.scopes or []) != actual:
+        actual = list(integ.scopes or [])
+        # Prefer stored scopes (fast path). Only hit tokeninfo when empty.
+        if not actual:
+            actual = self._resolve_actual_scopes(
+                {"access_token": access, "scope": " ".join(integ.scopes or [])}
+            )
+        if actual and list(integ.scopes or []) != actual and integ.service == service:
             integ.scopes = actual
             integ.save(update_fields=["scopes", "updated_at"])
         return not self._missing_required_scopes(service, actual)
+
+    def _integration_for_service(
+        self, user: User, service: str
+    ) -> GoogleIntegration | None:
+        return (
+            GoogleIntegration.objects.filter(user=user, service=service, is_active=True)
+            .order_by("-updated_at")
+            .first()
+        )
+
+    def _find_sibling_with_scopes(
+        self, user: User, service: str
+    ) -> GoogleIntegration | None:
+        """Find any active Google row whose scopes cover the requested service."""
+        for integ in GoogleIntegration.objects.filter(
+            user=user, is_active=True
+        ).order_by("-updated_at"):
+            access = decrypt_text(integ.access_token_encrypted)
+            if not access or str(access).startswith("demo:"):
+                continue
+            scopes = list(integ.scopes or [])
+            if not self._missing_required_scopes(service, scopes):
+                return integ
+        return None
+
+    def _adopt_token_from_sibling(
+        self, user: User, service: str
+    ) -> GoogleIntegration | None:
+        """
+        If Calendar was connected with the full Atlas scope bundle, clone that
+        token into Gmail/Drive/Sheets rows so those surfaces never re-prompt.
+        """
+        sibling = self._find_sibling_with_scopes(user, service)
+        if not sibling:
+            return None
+        access = decrypt_text(sibling.access_token_encrypted) or ""
+        refresh = decrypt_text(sibling.refresh_token_encrypted) or ""
+        if not access or access.startswith("demo:"):
+            return None
+        expires_in = 3600
+        if sibling.token_expires_at:
+            expires_in = max(
+                60, int((sibling.token_expires_at - timezone.now()).total_seconds())
+            )
+        tokens = {
+            "access_token": access,
+            "refresh_token": refresh,
+            "expires_in": expires_in,
+            "scope": " ".join(sibling.scopes or []),
+        }
+        return self._persist_tokens(user, service=service, tokens=tokens)
+
+    def _persist_tokens_for_all_covered(
+        self,
+        user: User,
+        *,
+        tokens: dict[str, Any],
+        actual_scopes: list[str],
+    ) -> list[str]:
+        """Write the same Google token onto every Atlas service the scopes cover."""
+        saved: list[str] = []
+        for svc in _ALL_ATLAS_SERVICES:
+            if self._missing_required_scopes(svc, actual_scopes):
+                continue
+            self._persist_tokens(user, service=svc, tokens=tokens)
+            saved.append(svc)
+        logger.info(
+            "event=oauth_tokens_fanout telegram_id=%s services=%s",
+            user.telegram_id,
+            saved,
+        )
+        return saved
 
     def _refresh(self, refresh_token: str) -> dict[str, Any]:
         import httpx

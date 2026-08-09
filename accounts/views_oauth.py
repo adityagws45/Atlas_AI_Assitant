@@ -115,14 +115,55 @@ def google_oauth_callback(request):
 
         user = User.objects.filter(telegram_id=result.get("telegram_id")).first()
         service = result.get("service") or GoogleService.DRIVE
+        saved = set(result.get("saved_services") or [service])
+
+        # Mark every Atlas Google surface that received tokens as live OAuth.
+        if user and GoogleService.GMAIL in saved:
+            try:
+                from gmail.models import GmailConnectionMode
+                from gmail.services.gmail_service import GmailService
+
+                gmail_state = GmailService().ensure_state(user)
+                gmail_state.mode = GmailConnectionMode.OAUTH
+                gmail_state.save(update_fields=["mode", "updated_at"])
+            except Exception:  # noqa: BLE001
+                logger.warning("event=oauth_gmail_mode_set_failed", exc_info=True)
+        if user and GoogleService.CALENDAR in saved:
+            try:
+                from gcalendar.models import CalendarConnectionMode
+                from gcalendar.services.calendar_service import CalendarService
+
+                cal_state = CalendarService().ensure_state(user)
+                cal_state.mode = CalendarConnectionMode.OAUTH
+                cal_state.save(update_fields=["mode", "updated_at"])
+            except Exception:  # noqa: BLE001
+                logger.warning("event=oauth_calendar_mode_set_failed", exc_info=True)
+        if user and GoogleService.DRIVE in saved:
+            try:
+                from drive.models import DriveConnectionMode
+                from drive.services.drive_sync import DriveSyncService
+
+                drive_state = DriveSyncService().ensure_state(user)
+                drive_state.mode = DriveConnectionMode.OAUTH
+                drive_state.save(update_fields=["mode", "updated_at"])
+            except Exception:  # noqa: BLE001
+                logger.warning("event=oauth_drive_mode_set_failed", exc_info=True)
+        if user and GoogleService.SHEETS in saved:
+            try:
+                from sheets.models import SheetConnectionMode
+                from sheets.services.sheet_service import SheetService
+
+                sheet_state = SheetService().ensure_state(user)
+                if sheet_state.mode != SheetConnectionMode.PUBLIC:
+                    sheet_state.mode = SheetConnectionMode.OAUTH
+                    sheet_state.save(update_fields=["mode", "updated_at"])
+            except Exception:  # noqa: BLE001
+                logger.warning("event=oauth_sheets_mode_set_failed", exc_info=True)
+
         if user and service == GoogleService.SHEETS:
-            from sheets.models import SheetConnectionMode
             from sheets.services.sheet_service import SheetService
 
             sheets = SheetService()
-            state_row = sheets.ensure_state(user)
-            state_row.mode = SheetConnectionMode.OAUTH
-            state_row.save(update_fields=["mode", "updated_at"])
             opened = sheets.resume_pending_after_oauth(
                 user, spreadsheet_id=result.get("pending_spreadsheet_id") or ""
             )
@@ -136,25 +177,21 @@ def google_oauth_callback(request):
             if not str(telegram_note).lower().startswith("google connected"):
                 telegram_note = "Google connected ✓\n" + str(telegram_note)
             msg = (
-                "Google Sheets is linked. Return to Telegram — Atlas will use "
-                "the spreadsheet you shared."
+                "Google is linked (Calendar, Gmail, Drive & Sheets). "
+                "Return to Telegram — Atlas will use the spreadsheet you shared."
             )
         elif user and service == GoogleService.GMAIL:
-            from gmail.models import GmailConnectionMode
             from gmail.services.gmail_service import GmailService
 
             gmail = GmailService()
             resumed = gmail.resume_after_oauth(user)
             if resumed.get("ok"):
-                state_row = gmail.ensure_state(user)
-                state_row.mode = GmailConnectionMode.OAUTH
-                state_row.save(update_fields=["mode", "updated_at"])
                 msg = (
-                    "Gmail is linked (read-only). Return to Telegram and ask Atlas "
-                    "to check your email."
+                    "Google is linked (Calendar, Gmail, Drive & Sheets). "
+                    "Return to Telegram and ask Atlas to check your email."
                 )
                 telegram_note = resumed.get("reply") or (
-                    "✅ Gmail connected. Ask me to check your inbox."
+                    "Google connected ✓\nAsk me to check your inbox."
                 )
             else:
                 msg = resumed.get("reply") or (
@@ -170,21 +207,17 @@ def google_oauth_callback(request):
                     status=400,
                 )
         elif user and service == GoogleService.CALENDAR:
-            from gcalendar.models import CalendarConnectionMode
             from gcalendar.services.calendar_service import CalendarService
 
             calendar = CalendarService()
             resumed = calendar.resume_after_oauth(user)
             if resumed.get("ok"):
-                state_row = calendar.ensure_state(user)
-                state_row.mode = CalendarConnectionMode.OAUTH
-                state_row.save(update_fields=["mode", "updated_at"])
                 msg = (
-                    "Google Calendar is linked. Return to Telegram — Atlas will use "
-                    "your real schedule."
+                    "Google is linked (Calendar, Gmail, Drive & Sheets). "
+                    "Return to Telegram — Atlas will use your real schedule."
                 )
                 telegram_note = resumed.get("reply") or (
-                    "✅ Google Calendar connected. Ask me about your schedule."
+                    "Google connected ✓\nAsk me about your schedule."
                 )
             else:
                 msg = resumed.get("reply") or (
@@ -201,16 +234,13 @@ def google_oauth_callback(request):
                     status=400,
                 )
         elif user:
-            from drive.models import DriveConnectionMode
             from drive.services.drive_service import DriveService
-            from drive.services.drive_sync import DriveSyncService
 
-            sync = DriveSyncService()
-            state_row = sync.ensure_state(user)
-            state_row.mode = DriveConnectionMode.OAUTH
-            state_row.save(update_fields=["mode", "updated_at"])
             resumed = DriveService().resume_after_oauth(user)
-            msg = "Google Drive is linked. Return to Telegram and ask Atlas about your files."
+            msg = (
+                "Google is linked (Calendar, Gmail, Drive & Sheets). "
+                "Return to Telegram and ask Atlas about your files."
+            )
             telegram_note = resumed.get("reply") or (
                 "Google connected ✓\nAsk me about your files."
             )

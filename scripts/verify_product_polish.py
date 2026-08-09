@@ -173,6 +173,46 @@ def test_entity_pronoun_resolve() -> None:
     print("PASS entity_pronoun_resolve")
 
 
+def test_unified_oauth_scopes_cover_all_services() -> None:
+    from accounts.services.google_oauth_service import UNIFIED_GOOGLE_SCOPES
+    from urllib.parse import unquote
+
+    blob = " ".join(UNIFIED_GOOGLE_SCOPES)
+    for needed in (
+        "gmail.readonly",
+        "calendar.readonly",
+        "calendar.events",
+        "drive.readonly",
+        "spreadsheets.readonly",
+    ):
+        assert needed in blob, needed
+    # start_auth must request the full bundle (mocked config)
+    from accounts.models import User
+    from accounts.services.google_oauth_service import GoogleOAuthService
+    from django.conf import settings
+
+    if not (
+        (settings.GOOGLE_CLIENT_ID or "").strip()
+        and (settings.GOOGLE_CLIENT_SECRET or "").strip()
+        and (settings.GOOGLE_REDIRECT_URI or "").strip()
+    ):
+        print("SKIP unified_oauth_start_url (oauth not configured locally)")
+        print("PASS unified_oauth_scopes_cover_all_services")
+        return
+
+    tid = 9700000999
+    User.objects.filter(telegram_id=tid).delete()
+    user = User.objects.create(telegram_id=tid, first_name="O")
+    started = GoogleOAuthService().start_auth(user, service="calendar")
+    assert started.get("ok"), started
+    url = unquote(started["auth_url"])
+    assert "gmail.readonly" in url
+    assert "calendar.readonly" in url
+    assert "spreadsheets.readonly" in url
+    assert "drive.readonly" in url
+    print("PASS unified_oauth_scopes_cover_all_services")
+
+
 def test_routing_never_steals_finance_calendar_docs() -> None:
     """Regression: active sheet must not steal live market / calendar / doc Qs."""
     from documents.services.document_intent import is_document_question
@@ -256,6 +296,7 @@ def main() -> None:
     test_sheet_yoy_revenue()
     test_entity_pronoun_resolve()
     test_finance_fast_path_detects_market_cap()
+    test_unified_oauth_scopes_cover_all_services()
     test_routing_never_steals_finance_calendar_docs()
     test_market_fast_path_no_gemini()
     print("\nPRODUCT_POLISH_VERIFICATION: PASS")

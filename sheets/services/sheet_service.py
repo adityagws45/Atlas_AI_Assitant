@@ -148,7 +148,9 @@ class SheetService:
                     "error_code": reason,
                     "reply": google_access_required_reply(
                         auth_url,
-                        purpose="Connect Google so I can read this spreadsheet.",
+                        purpose=(
+                            "Connect Google once for Calendar, Gmail, Drive, and Sheets."
+                        ),
                     ),
                 }
             return {
@@ -307,7 +309,9 @@ class SheetService:
                     "auth_url": auth_url,
                     "reply": google_access_required_reply(
                         auth_url,
-                        purpose="Connect Google to read your spreadsheets.",
+                        purpose=(
+                            "Connect Google once for Calendar, Gmail, Drive, and Sheets."
+                        ),
                     ),
                 }
         self.connect_demo(user)

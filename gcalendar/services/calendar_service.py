@@ -277,7 +277,9 @@ class CalendarService:
                     "auth_url": auth_url,
                     "reply": google_access_required_reply(
                         auth_url,
-                        purpose="Connect Google to check your Calendar.",
+                        purpose=(
+                            "Connect Google once for Calendar, Gmail, Drive, and Sheets."
+                        ),
                     ),
                 }
             return {
