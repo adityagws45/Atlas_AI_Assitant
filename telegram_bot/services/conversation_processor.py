@@ -67,6 +67,26 @@ class ConversationProcessor:
         telegram_message_id: int | None = None,
         force_reset: bool = False,
     ) -> str:
+        return self.handle_start_refresh(
+            telegram_id=telegram_id,
+            username=username,
+            first_name=first_name,
+            last_name=last_name,
+            telegram_message_id=telegram_message_id,
+            force_reset=force_reset,
+        )["reply"]
+
+    def handle_start_refresh(
+        self,
+        *,
+        telegram_id: int,
+        username: str = "",
+        first_name: str = "",
+        last_name: str = "",
+        telegram_message_id: int | None = None,
+        force_reset: bool = False,
+    ) -> dict:
+        """/start: wipe prior chat context and return ids to clear on Telegram."""
         try:
             user, created = UserService.get_or_create_from_telegram(
                 telegram_id=telegram_id,
@@ -74,7 +94,20 @@ class ConversationProcessor:
                 first_name=first_name,
                 last_name=last_name,
             )
-            conversation = MessageService.get_or_create_active_conversation(user)
+            conversation, prior_tg_ids = MessageService.start_fresh_conversation(user)
+            # Soft-clear ephemeral follow-up state so old sheet/doc threads don't stick
+            try:
+                self.doc_memory.pop_pending_question(user)
+                self.doc_memory.clear_focus(user)
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                from conversation.services.entity_context import EntityContext
+
+                EntityContext().clear(user)
+            except Exception:  # noqa: BLE001
+                pass
+
             if user.onboarding_completed and not force_reset and not created:
                 reply = self.onboarding.welcome_back(user)
                 event = "welcome_back"
@@ -85,26 +118,31 @@ class ConversationProcessor:
                 conversation,
                 "/start",
                 telegram_message_id=telegram_message_id,
-                metadata={"event": event},
+                metadata={"event": event, "chat_refreshed": True},
             )
             MessageService.save_assistant_message(
                 conversation,
                 reply,
-                metadata={"event": event},
+                metadata={"event": event, "chat_refreshed": True},
             )
             logger.info(
-                "event=start_ok telegram_id=%s new_user=%s mode=%s",
+                "event=start_ok telegram_id=%s new_user=%s mode=%s cleared_tg=%s",
                 telegram_id,
                 created,
                 event,
+                len(prior_tg_ids),
             )
-            return reply
+            return {
+                "reply": reply,
+                "telegram_message_ids_to_delete": prior_tg_ids,
+                "event": event,
+            }
         except OperationalError:
             logger.exception("event=start_db_error telegram_id=%s", telegram_id)
-            return FRIENDLY_ERROR
+            return {"reply": FRIENDLY_ERROR, "telegram_message_ids_to_delete": []}
         except Exception:
             logger.exception("event=start_error telegram_id=%s", telegram_id)
-            return FRIENDLY_ERROR
+            return {"reply": FRIENDLY_ERROR, "telegram_message_ids_to_delete": []}
 
     def handle_document(
         self,

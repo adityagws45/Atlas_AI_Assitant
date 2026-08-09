@@ -36,6 +36,12 @@ class EntityContext:
             return {}
         return dict(mem.value)
 
+    def clear(self, user: User) -> None:
+        """Drop follow-up entity context (used on /start chat refresh)."""
+        deleted, _ = AssistantMemory.objects.filter(user=user, key=ENTITY_KEY).delete()
+        if deleted:
+            logger.info("event=entity_cleared telegram_id=%s", user.telegram_id)
+
     def remember(
         self,
         user: User,

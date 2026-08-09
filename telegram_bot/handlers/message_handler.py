@@ -36,8 +36,8 @@ def _user_kwargs(update: Update) -> dict:
 
 
 @sync_to_async
-def _handle_start_sync(**kwargs) -> str:
-    return _processor.handle_start(**kwargs)
+def _handle_start_sync(**kwargs) -> dict:
+    return _processor.handle_start_refresh(**kwargs)
 
 
 @sync_to_async
@@ -48,6 +48,51 @@ def _handle_text_sync(**kwargs) -> str:
 @sync_to_async
 def _transcribe_sync(**kwargs):
     return _voice_stt.transcribe_bytes(**kwargs)
+
+
+async def _clear_recent_chat(
+    *,
+    bot,
+    chat_id: int,
+    current_message_id: int,
+    known_ids: list[int],
+) -> None:
+    """Best-effort wipe of recent Telegram bubbles so /start feels like a fresh chat.
+
+    Telegram only allows deleting some messages (own bot messages / recent private
+    chat messages). Failures are ignored — the backend conversation is still reset.
+    """
+    ids: set[int] = {int(i) for i in (known_ids or []) if i}
+    # Sweep a window of recent ids (covers bot replies we never stored).
+    lo = max(1, int(current_message_id) - 80)
+    for mid in range(lo, int(current_message_id)):
+        ids.add(mid)
+    id_list = sorted(ids, reverse=True)[:100]
+    if not id_list:
+        return
+    try:
+        await bot.delete_messages(chat_id=chat_id, message_ids=id_list)
+        logger.info(
+            "event=start_chat_cleared chat_id=%s count=%s",
+            chat_id,
+            len(id_list),
+        )
+        return
+    except Exception:
+        pass
+    deleted = 0
+    for mid in id_list:
+        try:
+            await bot.delete_message(chat_id=chat_id, message_id=mid)
+            deleted += 1
+        except Exception:
+            continue
+    logger.info(
+        "event=start_chat_cleared_partial chat_id=%s deleted=%s tried=%s",
+        chat_id,
+        deleted,
+        len(id_list),
+    )
 
 
 async def _safe_reply(update: Update, text: str, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -80,11 +125,25 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     logger.info("event=incoming_start telegram_id=%s", update.effective_user.id)
     try:
         await TelegramAdapter.send_typing(update.message)
-        reply = await _handle_start_sync(
+        result = await _handle_start_sync(
             **_user_kwargs(update),
             telegram_message_id=update.message.message_id,
         )
-        await _safe_reply(update, reply, context)
+        chat_id = update.effective_chat.id if update.effective_chat else update.message.chat_id
+        await _clear_recent_chat(
+            bot=context.bot,
+            chat_id=chat_id,
+            current_message_id=update.message.message_id,
+            known_ids=list(result.get("telegram_message_ids_to_delete") or []),
+        )
+        await _safe_reply(update, result.get("reply") or "", context)
+        # Remove the /start bubble itself so only the fresh welcome remains.
+        try:
+            await context.bot.delete_message(
+                chat_id=chat_id, message_id=update.message.message_id
+            )
+        except Exception:
+            pass
     except Exception:
         logger.exception("event=handler_start_error telegram_id=%s", update.effective_user.id)
         await _safe_reply(

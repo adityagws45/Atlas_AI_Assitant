@@ -38,6 +38,41 @@ class MessageService:
         return conversation
 
     @staticmethod
+    def start_fresh_conversation(user: User) -> tuple[Conversation, list[int]]:
+        """
+        Close prior chats and open a new blank conversation.
+
+        Returns (new_conversation, telegram_message_ids) so /start can delete
+        old Telegram bubbles when the Bot API allows it.
+        """
+        old_ids: list[int] = list(
+            Message.objects.filter(
+                conversation__user=user,
+                telegram_message_id__isnull=False,
+            )
+            .order_by("-created_at")
+            .values_list("telegram_message_id", flat=True)[:120]
+        )
+        Conversation.objects.filter(user=user, is_active=True).update(is_active=False)
+        Message.objects.filter(
+            conversation__user=user, is_archived=False
+        ).update(is_archived=True)
+        conversation = Conversation.objects.create(
+            user=user,
+            is_active=True,
+            title="Main conversation",
+            context_summary="",
+            last_message_at=timezone.now(),
+        )
+        logger.info(
+            "event=conversation_refreshed conversation_id=%s telegram_id=%s prior_tg_msgs=%s",
+            conversation.id,
+            user.telegram_id,
+            len(old_ids),
+        )
+        return conversation, [int(i) for i in old_ids if i]
+
+    @staticmethod
     def save_user_message(
         conversation: Conversation,
         content: str,
