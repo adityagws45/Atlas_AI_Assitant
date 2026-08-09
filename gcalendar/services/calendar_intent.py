@@ -29,7 +29,10 @@ TODAY = re.compile(
     r"important meetings? today|"
     r"(any|do i have)( any)? meetings? this afternoon|"
     r"do i have anything (today|this afternoon)|"
-    r"what do i have today"
+    r"what do i have today|"
+    r"what do i have scheduled( today)?|"
+    r"what('?s| is) (on )?my schedule( today)?|"
+    r"(any|do i have)( any)? (events?|appointments?) today"
     r")\b",
     re.IGNORECASE,
 )

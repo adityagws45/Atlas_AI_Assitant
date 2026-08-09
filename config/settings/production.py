@@ -40,7 +40,14 @@ if not _redirect or "localhost" in _redirect or "127.0.0.1" in _redirect:
     if _pub.startswith("https://"):
         GOOGLE_REDIRECT_URI = f"{_pub.rstrip('/')}/api/oauth/google/callback/"
     else:
-        raise RuntimeError(
-            "Production requires GOOGLE_REDIRECT_URI or PUBLIC_BASE_URL as HTTPS "
-            "(not localhost). Register the same URI in Google Cloud OAuth credentials."
-        )
+        # Known production host fallback (must also be registered in Google Cloud).
+        _hosts = ALLOWED_HOSTS if isinstance(ALLOWED_HOSTS, (list, tuple)) else []  # noqa: F405
+        if any("atlas-ai-assitant.onrender.com" in str(h) for h in _hosts):
+            GOOGLE_REDIRECT_URI = (
+                "https://atlas-ai-assitant.onrender.com/api/oauth/google/callback/"
+            )
+        else:
+            raise RuntimeError(
+                "Production requires GOOGLE_REDIRECT_URI or PUBLIC_BASE_URL as HTTPS "
+                "(not localhost). Register the same URI in Google Cloud OAuth credentials."
+            )

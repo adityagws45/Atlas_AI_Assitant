@@ -173,6 +173,27 @@ def test_entity_pronoun_resolve() -> None:
     print("PASS entity_pronoun_resolve")
 
 
+def test_routing_never_steals_finance_calendar_docs() -> None:
+    """Regression: active sheet must not steal live market / calendar / doc Qs."""
+    from documents.services.document_intent import is_document_question
+    from drive.services.drive_intent import detect_drive_intent
+    from gcalendar.services.calendar_intent import detect_calendar_intent
+    from sheets.services.sheet_intent import detect_sheet_intent
+
+    nvidia = "What's happening with Nvidia today?"
+    compare = "Compare Nvidia and AMD."
+    scheduled = "What do I have scheduled today?"
+    doc = "What is this document about?"
+
+    assert detect_sheet_intent(nvidia, has_active_sheet=True).kind == "none"
+    assert detect_sheet_intent(compare, has_active_sheet=True).kind == "none"
+    assert detect_sheet_intent(scheduled, has_active_sheet=True).kind == "none"
+    assert detect_calendar_intent(scheduled).kind == "today"
+    assert detect_drive_intent(doc).kind == "none"
+    assert is_document_question(doc) is True
+    print("PASS routing_never_steals_finance_calendar_docs")
+
+
 def test_market_fast_path_no_gemini() -> None:
     from conversation.services.market_fast_path import try_market_move_fast_answer
 
@@ -235,6 +256,7 @@ def main() -> None:
     test_sheet_yoy_revenue()
     test_entity_pronoun_resolve()
     test_finance_fast_path_detects_market_cap()
+    test_routing_never_steals_finance_calendar_docs()
     test_market_fast_path_no_gemini()
     print("\nPRODUCT_POLISH_VERIFICATION: PASS")
 

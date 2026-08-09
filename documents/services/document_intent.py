@@ -16,10 +16,14 @@ DOC_QUESTION = re.compile(
     r"from the (report|filing|document|deck)|in the (report|filing)|"
     r"according to the (report|filing)|year[- ]over[- ]year|yoy|"
     r"long[- ]term ai investor|as an? (long[- ]term )?(ai )?investor|"
-    r"which section|section discusses"
+    r"which section|section discusses|"
+    r"what (is|does) (this|the|my) (document|pdf|file|report|filing)|"
+    r"(this|the) (document|pdf|file) (about|say|cover)|"
+    r"tell me about (this|the) (document|pdf|file|report)"
     r")\b",
     re.IGNORECASE,
 )
+
 
 COMPARE_HINT = re.compile(
     r"\b(compare|versus|vs\.?|difference|what changed|last year|prior year|"

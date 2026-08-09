@@ -23,9 +23,14 @@ DISCONNECT = re.compile(
 SEARCH = re.compile(
     r"\b("
     r"search( my)? (google )?drive|find( in)?( my)? (google )?drive|"
-    r"look( in)?( my)? (google )?drive|what( files| documents)? do i have|"
-    r"which( files| documents)? do i have|documents? (about|on|for)|"
-    r"files? (about|on|for)|show( me)?( my)? (files|documents|drive)"
+    r"look( in)?( my)? (google )?drive|"
+    r"what( files| documents)? do i have (in|on) (my )?(google )?drive|"
+    r"which( files| documents)? do i have (in|on) (my )?(google )?drive|"
+    r"(my )?(google )?drive (documents?|files?) (about|on|for)|"
+    r"files? (about|on|for)|"
+    r"show( me)?( my)? (drive )?files|"
+    r"find my .{0,40}(report|filing|presentation|deck)|"
+    r"search my drive for"
     r")\b",
     re.IGNORECASE,
 )

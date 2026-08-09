@@ -336,6 +336,97 @@ class ConversationProcessor:
                 )
                 return reply
 
+            # Live finance BEFORE Sheets — an open spreadsheet must never steal
+            # "What's happening with Nvidia" / market-cap / compare questions.
+            if user.onboarding_completed:
+                from conversation.services.entity_context import EntityContext
+                from conversation.services.finance_fast_path import (
+                    try_finance_fast_answer,
+                )
+                from conversation.services.market_fast_path import (
+                    try_market_move_fast_answer,
+                )
+                from finance.utils.ticker_resolve import resolve_symbol, resolve_symbols
+
+                entities = EntityContext()
+                default_sym = entities.resolve_symbol(user, text)
+                market = try_market_move_fast_answer(text, default_symbol=default_sym)
+                if market:
+                    reply = self.orchestrator.formatter.format(market["reply"])
+                    metadata = {
+                        "onboarding": False,
+                        **(market.get("metadata") or {}),
+                    }
+                    MessageService.save_assistant_message(
+                        conversation, reply, metadata=metadata
+                    )
+                    sym = (market.get("metadata") or {}).get("symbol")
+                    if sym:
+                        entities.remember(user, symbol=str(sym), topic="market")
+                    logger.info(
+                        "event=text_ok telegram_id=%s onboarding=%s ai=%s chars=%s",
+                        telegram_id,
+                        False,
+                        True,
+                        len(text),
+                    )
+                    return reply
+
+                fast = try_finance_fast_answer(text, default_symbol=default_sym)
+                if fast:
+                    reply = self.orchestrator.formatter.format(fast["reply"])
+                    metadata = {
+                        "onboarding": False,
+                        **(fast.get("metadata") or {}),
+                    }
+                    MessageService.save_assistant_message(
+                        conversation, reply, metadata=metadata
+                    )
+                    sym = (fast.get("metadata") or {}).get("symbol")
+                    if sym:
+                        entities.remember(user, symbol=str(sym), topic="finance")
+                    logger.info(
+                        "event=text_ok telegram_id=%s onboarding=%s ai=%s chars=%s",
+                        telegram_id,
+                        False,
+                        True,
+                        len(text),
+                    )
+                    return reply
+
+                # Compare tickers without an active-sheet cue → AI research, not Sheets
+                named = resolve_symbols(text) or []
+                one = resolve_symbol(text)
+                if not named and one:
+                    named = [one]
+                if (
+                    len(named) >= 2
+                    and re.search(r"\b(compare|vs\.?|versus)\b", text, re.I)
+                    and not re.search(
+                        r"\b(sheet|spreadsheet|portfolio|holding)\b", text, re.I
+                    )
+                ):
+                    ai_result = self.orchestrator.process(user, conversation, text)
+                    reply = ai_result["reply"]
+                    metadata = {"onboarding": False, **(ai_result.get("metadata") or {})}
+                    MessageService.save_assistant_message(
+                        conversation, reply, metadata=metadata
+                    )
+                    entities.remember(
+                        user,
+                        symbol=named[0],
+                        alt_symbols=named[1:],
+                        topic="compare",
+                    )
+                    logger.info(
+                        "event=text_ok telegram_id=%s onboarding=%s ai=%s chars=%s",
+                        telegram_id,
+                        False,
+                        True,
+                        len(text),
+                    )
+                    return reply
+
             # Sheets / portfolio before Drive — "open my portfolio" is finance data,
             # not a Drive file import. One assistant, two sources; sheets win on overlap.
             # Exception: ambiguous "biggest risks" / summary must not auto-open a demo
@@ -383,6 +474,53 @@ class ConversationProcessor:
                     len(text),
                 )
                 return reply
+
+            # Active PDF/report Q&A before Drive — "What is this document about?"
+            # must never become a Drive OAuth prompt.
+            if user.onboarding_completed and (
+                is_document_question(text)
+                or is_document_compare(text)
+                or _looks_like_doc_followup(text)
+            ):
+                if self.doc_memory.processing_document_ids(user):
+                    self.doc_memory.remember_pending_question(user, text)
+                    reply = (
+                        "Still processing the report — I'll answer as soon as it's ready."
+                    )
+                    MessageService.save_assistant_message(
+                        conversation,
+                        reply,
+                        metadata={
+                            "onboarding": False,
+                            "pipeline": "document_pending",
+                            "ok": True,
+                            "queued": True,
+                        },
+                    )
+                    return reply
+                active_ids = self.doc_memory.active_document_ids(user)
+                if active_ids:
+                    qa = self.doc_qa.answer(
+                        user,
+                        text,
+                        document_ids=active_ids,
+                        compare=is_document_compare(text),
+                    )
+                    reply = self.orchestrator.formatter.format(
+                        qa.get("reply")
+                        or "I couldn't pull a clean take from the report."
+                    )
+                    MessageService.save_assistant_message(
+                        conversation,
+                        reply,
+                        metadata={
+                            "onboarding": False,
+                            "pipeline": "document_qa",
+                            "ok": bool(qa.get("ok")),
+                            "document_ids": qa.get("document_ids") or active_ids,
+                        },
+                    )
+                    return reply
 
             # Drive library intents beat preference/sector short-circuits
             drive_intent = (

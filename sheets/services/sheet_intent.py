@@ -112,12 +112,13 @@ CHARTS = re.compile(
     re.IGNORECASE,
 )
 
-# Domains that must NOT be stolen by active-sheet catch-all
+# Domains that must NEVER be stolen by active-sheet catch-all
 OTHER_DOMAIN = re.compile(
     r"\b("
-    r"schedule|remind me|calendar|when am i free|block \d|"
+    r"schedule|scheduled|remind me|calendar|when am i free|block \d|"
     r"meetings? (today|tomorrow)|my (calendar|schedule)|"
     r"next meeting|conflicts?|free (time|slot|hour)|"
+    r"what do i have scheduled|"
     r"(any|do i have)( any)? tasks?|"
     r"check (my )?(email|inbox|gmail)|my (emails?|inbox)|"
     r"(latest|recent|unread) (e)?mails?|find (e)?mails?|emails? (from|about)|"
@@ -130,39 +131,48 @@ OTHER_DOMAIN = re.compile(
     re.IGNORECASE,
 )
 
-# Follow-ups that should stick to the ACTIVE sheet (any dataset)
-ACTIVE_FOLLOWUP = re.compile(
+# Live market / research questions belong to finance — never the open sheet
+MARKET_RESEARCH = re.compile(
     r"\b("
-    r"analyze( this| the| that)? (sheet|one|it)|"
-    r"(quick )?analysis|"
-    r"this sheet|the sheet|that sheet|this one|that one|"
-    r"revenue|net income|earnings|metric|metrics|"
-    r"which metric|improved the most|year[- ]?over[- ]?year|"
-    r"in 20\d{2}|for 20\d{2}|fy\s*20\d{2}|"
-    r"what stands out|summarize|biggest risks?|"
-    r"total|allocation|holdings?|portfolio|"
-    r"how (did|does|is|many|much)|what (was|were|is|are)|"
-    r"which|who|listed|count|average|sum of|"
-    r"main (financial )?trends?|financial trends?|"
-    r"why\??|compare|percentage|unusual|explain|findings|"
-    r"performed|growth|company|companies|students?|"
-    r"pay attention|quick analysis"
+    r"what'?s happening|whats happening|what is happening|"
+    r"why is .{0,40}\b(up|down|moving|rallying|falling)|"
+    r"what'?s moving|market (cap|update|today)|"
+    r"share price|stock price|trading (at|today)|"
+    r"compare (nvidia|amd|apple|microsoft|tesla|google|meta|amazon)|"
+    r"compare .{0,20}\b(and|vs\.?|versus)\b|"
+    r"\b(nvidia|amd|apple|microsoft|tesla|google|alphabet|meta|amazon|"
+    r"nvda|aapl|msft|tsla|googl|amzn)\b.{0,40}\b(today|competitors?|"
+    r"market cap|p/?e|valuation|earnings|news)\b|"
+    r"\b(today|this week).{0,30}\b(nvidia|amd|apple|nvda|stock|market)\b"
     r")\b",
     re.IGNORECASE,
 )
 
-# Short follow-ups that look like sheet data questions (not schedule/tasks)
-_SHEET_DATA_QUESTION = re.compile(
+# Explicit sheet/data cues required for active-sheet follow-ups
+SHEET_CUE = re.compile(
     r"\b("
-    r"how many|how much|what|which|who|when|list|show|total|count|"
-    r"average|sum|summarize|analyze|compare|explain"
+    r"sheet|spreadsheet|workbook|portfolio|holdings?|"
+    r"revenue|net income|gross profit|operating income|eps|"
+    r"metric|metrics|column|row|cells?|"
+    r"average|sum|total|yoy|year[- ]over[- ]year|"
+    r"in (the|my|this|that) (sheet|spreadsheet|workbook)|"
+    r"from (the|my|this) sheet"
     r")\b",
     re.IGNORECASE,
 )
-_NOT_SHEET_FOLLOWUP = re.compile(
+
+# Follow-ups that should stick to the ACTIVE sheet (require SHEET_CUE too)
+ACTIVE_FOLLOWUP = re.compile(
     r"\b("
-    r"tasks?|to-?dos?|reminders?|meetings?|calendar|schedule|"
-    r"email|inbox|gmail|(e)?mails?|stock price|share price"
+    r"analyze( this| the| that)? (sheet|one|it)|"
+    r"(quick )?analysis|"
+    r"this sheet|the sheet|that sheet|"
+    r"which metric|improved the most|"
+    r"what stands out|summarize (the|this|my) (sheet|portfolio)|"
+    r"biggest risks? in (my |the )?(portfolio|sheet)|"
+    r"allocation|holdings?|"
+    r"average|sum of|highest|lowest|yo+y|year[- ]over[- ]year|"
+    r"which year|what was the (average|highest|lowest)"
     r")\b",
     re.IGNORECASE,
 )
@@ -213,13 +223,17 @@ def detect_sheet_intent(
     if sheet_id:
         return SheetIntent(kind="open_url", mode="summary", query=sheet_id)
 
-    # Scheduling language belongs to Calendar (M9), not spreadsheet analysis
-    if OTHER_DOMAIN.search(raw) or re.search(
-        r"\b(schedule|remind me|find time for|block \d|block two hours|when am i free)\b",
+    # Calendar / Gmail / Drive / market research never belong to Sheets
+    if OTHER_DOMAIN.search(raw) or MARKET_RESEARCH.search(raw):
+        return SheetIntent(kind="none")
+    if re.search(
+        r"\b(schedule|scheduled|remind me|find time for|block \d|"
+        r"block two hours|when am i free)\b",
         raw,
         re.IGNORECASE,
     ):
         return SheetIntent(kind="none")
+
     if CONNECT.search(raw):
         return SheetIntent(kind="connect")
     if LIST.search(raw):
@@ -238,24 +252,30 @@ def detect_sheet_intent(
         if ticker:
             return SheetIntent(kind="analyze", mode="ticker", query=ticker)
 
-    if CHANGED.search(raw):
+    if CHANGED.search(raw) and (SHEET_CUE.search(raw) or not has_active_sheet):
+        if has_active_sheet and not SHEET_CUE.search(raw):
+            return SheetIntent(kind="none")
         return SheetIntent(kind="analyze", mode="trends" if not has_active_sheet else "qa", query=raw)
-    if OUTLIERS.search(raw):
+    if OUTLIERS.search(raw) and SHEET_CUE.search(raw):
         return SheetIntent(kind="analyze", mode="qa", query=raw)
     if RISKS.search(raw):
+        if has_active_sheet and not SHEET_CUE.search(raw) and "portfolio" not in raw.lower():
+            return SheetIntent(kind="none")
         return SheetIntent(kind="analyze", mode="qa" if has_active_sheet else "risks", query=raw)
     if RECS.search(raw) or CHARTS.search(raw):
+        if has_active_sheet and not SHEET_CUE.search(raw):
+            return SheetIntent(kind="none")
         return SheetIntent(kind="analyze", mode="qa" if has_active_sheet else "recs", query=raw)
     if ALLOCATION.search(raw):
         return SheetIntent(kind="analyze", mode="qa" if has_active_sheet else "portfolio", query=raw)
     if BEST.search(raw) and (
         any(x in raw.lower() for x in ("holding", "portfolio", "perform", "metric", "company"))
-        or has_active_sheet
+        and (SHEET_CUE.search(raw) or not has_active_sheet)
     ):
         return SheetIntent(kind="analyze", mode="qa" if has_active_sheet else "best", query=raw)
     if WORST.search(raw) and (
-        any(x in raw.lower() for x in ("holding", "portfolio", "concern", "perform", "company"))
-        or has_active_sheet
+        any(x in raw.lower() for x in ("holding", "portfolio", "concern", "perform"))
+        and (SHEET_CUE.search(raw) or not has_active_sheet)
     ):
         return SheetIntent(kind="analyze", mode="qa" if has_active_sheet else "worst", query=raw)
     if SUMMARY.search(raw):
@@ -272,22 +292,9 @@ def detect_sheet_intent(
             return SheetIntent(kind="analyze", mode="qa", query=raw)
         return SheetIntent(kind="open", mode="analysis", query=raw)
 
-    # Stick to the active sheet for clear sheet/data follow-ups — never merely
-    # because the message is short, and never for calendar/task language.
-    if has_active_sheet:
-        if _NOT_SHEET_FOLLOWUP.search(raw) and not re.search(
-            r"\b(sheet|spreadsheet|portfolio|revenue|metric|holding|student)\b",
-            raw,
-            re.I,
-        ):
-            return SheetIntent(kind="none")
-        if ACTIVE_FOLLOWUP.search(raw):
-            return SheetIntent(kind="analyze", mode="qa", query=raw)
-        if (
-            len(raw.split()) <= 16
-            and _SHEET_DATA_QUESTION.search(raw)
-            and ("?" in raw or raw.lower().startswith(("how ", "what ", "which ", "who ", "show ", "list ")))
-        ):
-            return SheetIntent(kind="analyze", mode="qa", query=raw)
+    # Active sheet: ONLY when the user clearly refers to sheet/portfolio data.
+    # Never steal live market, calendar, gmail, or general research questions.
+    if has_active_sheet and SHEET_CUE.search(raw) and ACTIVE_FOLLOWUP.search(raw):
+        return SheetIntent(kind="analyze", mode="qa", query=raw)
 
     return SheetIntent(kind="none")
