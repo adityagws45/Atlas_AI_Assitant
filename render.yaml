@@ -23,7 +23,7 @@ services:
     plan: free
     numInstances: 1
     buildCommand: pip install -r requirements/prod.txt && python manage.py migrate --noinput && python manage.py collectstatic --noinput
-    startCommand: gunicorn config.wsgi:application --bind 0.0.0.0:$PORT
+    startCommand: gunicorn config.wsgi:application --bind 0.0.0.0:$PORT --timeout 120 --graceful-timeout 30 --keep-alive 5 --workers 1
     healthCheckPath: /health/
     envVars:
       - fromGroup: atlas-ai-shared

@@ -17,6 +17,11 @@ def google_access_required_reply(auth_url: str, *, purpose: str = "") -> str:
         lines.append(purpose)
     lines.append("")
     lines.append("Tap *Connect Google* below.")
+    lines.append("")
+    lines.append(
+        "If Google says the app is *unverified*, tap *Advanced* → "
+        "*Go to Atlas (unsafe)* → *Allow* (normal for new apps)."
+    )
     if url:
         lines.append(f"\n[Connect Google]({url})")
     return "\n".join(lines)

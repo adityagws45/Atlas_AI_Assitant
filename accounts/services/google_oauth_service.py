@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import secrets
+import threading
 from datetime import timedelta
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -19,7 +20,7 @@ from core.crypto import decrypt_text, encrypt_text
 
 logger = logging.getLogger("atlas.accounts.oauth")
 
-STATE_TTL = 600
+STATE_TTL = 1800  # 30m — covers Render cold starts during Google consent
 DRIVE_SCOPES = [
     "https://www.googleapis.com/auth/drive.readonly",
     "https://www.googleapis.com/auth/userinfo.email",
@@ -112,6 +113,27 @@ class GoogleOAuthService:
     def redirect_uri(self) -> str:
         return (getattr(settings, "GOOGLE_REDIRECT_URI", "") or "").strip()
 
+    @staticmethod
+    def _warm_public_host() -> None:
+        """Best-effort ping so free-tier hosts are awake for the OAuth callback."""
+        base = (getattr(settings, "PUBLIC_BASE_URL", "") or "").strip().rstrip("/")
+        if not base.startswith("https://"):
+            redirect = (getattr(settings, "GOOGLE_REDIRECT_URI", "") or "").strip()
+            if "onrender.com" in redirect:
+                base = "https://atlas-ai-assitant.onrender.com"
+            else:
+                return
+
+        def _ping() -> None:
+            try:
+                import httpx
+
+                httpx.get(f"{base}/health/", timeout=8)
+            except Exception:  # noqa: BLE001
+                pass
+
+        threading.Thread(target=_ping, name="oauth-warm", daemon=True).start()
+
     def start_auth(
         self,
         user: User,
@@ -130,6 +152,8 @@ class GoogleOAuthService:
                     "GOOGLE_REDIRECT_URI (or PUBLIC_BASE_URL) on the deployed backend."
                 ),
             }
+        # Wake Render before the user finishes Google consent (prevents callback 502).
+        self._warm_public_host()
         state = secrets.token_urlsafe(24)
         # Always request the full Atlas Google bundle — connecting Calendar must also
         # unlock Gmail / Drive / Sheets so the bot never asks again per feature.

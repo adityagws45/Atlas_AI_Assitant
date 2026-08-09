@@ -3,15 +3,38 @@
 from __future__ import annotations
 
 import logging
+import threading
 
 import httpx
 from django.conf import settings
-from django.http import HttpResponse, HttpResponseBadRequest
+from django.http import HttpResponse
+from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET
 
 from accounts.services.google_oauth_service import GoogleOAuthService
 
 logger = logging.getLogger("atlas.accounts.oauth_views")
+
+
+def _html_page(title: str, body: str, *, status: int = 200) -> HttpResponse:
+    return HttpResponse(
+        f"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>{title}</title>
+<style>
+body{{font-family:system-ui,-apple-system,sans-serif;max-width:36rem;margin:3rem auto;padding:0 1.25rem;line-height:1.5;color:#111}}
+h1{{font-size:1.35rem;margin:0 0 .75rem}}
+.card{{border:1px solid #e5e7eb;border-radius:12px;padding:1.25rem}}
+.ok{{color:#065f46}} .warn{{color:#92400e}}
+a{{color:#1d4ed8}}
+</style></head>
+<body><div class="card"><h1>{title}</h1>{body}</div>
+<p style="margin-top:1.5rem;color:#6b7280;font-size:.9rem">You can close this tab and return to Telegram.</p>
+</body></html>""",
+        content_type="text/html",
+        status=status,
+    )
 
 
 def _notify_telegram(telegram_id: int | None, text: str) -> None:
@@ -37,9 +60,7 @@ def _notify_telegram(telegram_id: int | None, text: str) -> None:
         }
         if auth_url:
             payload["reply_markup"] = {
-                "inline_keyboard": [
-                    [{"text": "🔗 Connect Google", "url": auth_url}]
-                ]
+                "inline_keyboard": [[{"text": "🔗 Connect Google", "url": auth_url}]]
             }
         httpx.post(
             f"https://api.telegram.org/bot{token}/sendMessage",
@@ -50,66 +71,12 @@ def _notify_telegram(telegram_id: int | None, text: str) -> None:
         logger.exception("event=oauth_telegram_notify_failed telegram_id=%s", telegram_id)
 
 
-@require_GET
-def google_oauth_callback(request):
-    code = (request.GET.get("code") or "").strip()
-    state = (request.GET.get("state") or "").strip()
-    error = (request.GET.get("error") or "").strip()
-    if error:
-        logger.warning("event=oauth_callback_denied error=%s", error[:40])
-        return HttpResponse(
-            "<html><body><h2>Authorization cancelled</h2>"
-            "<p>You can close this tab and try again from Telegram.</p></body></html>",
-            content_type="text/html",
-        )
-    if not code or not state:
-        return HttpResponseBadRequest("Missing code or state.")
-    result = GoogleOAuthService().handle_callback(code=code, state=state)
-    if not result.get("ok"):
-        msg = result.get("error") or "Authorization failed."
-        logger.warning(
-            "event=oauth_callback_failed code=%s",
-            result.get("error_code") or "unknown",
-        )
-        # Tell Telegram the truth — never imply Calendar is connected
-        telegram_id = result.get("telegram_id")
-        service = result.get("service") or ""
-        if telegram_id and result.get("error_code") == "insufficient_scopes":
-            try:
-                from accounts.models import GoogleService, User
-                from gcalendar.services.calendar_service import CalendarService
+def _finish_oauth_background(result: dict) -> None:
+    """Heavy post-connect work — must never block the OAuth HTTP response (avoids 502)."""
+    from django.db import close_old_connections
 
-                user = User.objects.filter(telegram_id=telegram_id).first()
-                if user and service == GoogleService.CALENDAR:
-                    reconnect = CalendarService().connect(user)
-                    note = msg
-                    if reconnect.get("auth_url"):
-                        note = (
-                            f"{msg}\n\n"
-                            "Tap *Connect Google* again and make sure Calendar access is allowed:\n"
-                            f"{reconnect['auth_url']}"
-                        )
-                    _notify_telegram(telegram_id, note)
-                else:
-                    _notify_telegram(telegram_id, msg)
-            except Exception:  # noqa: BLE001
-                logger.exception("event=oauth_insufficient_scopes_notify_failed")
-                _notify_telegram(telegram_id, msg)
-        elif telegram_id:
-            _notify_telegram(telegram_id, msg)
-        return HttpResponse(
-            f"<html><body><h2>Couldn’t connect</h2><p>{msg}</p></body></html>",
-            content_type="text/html",
-            status=400,
-        )
-    logger.info(
-        "event=oauth_callback_ok telegram_id=%s service=%s pending_sheet=%s",
-        result.get("telegram_id"),
-        result.get("service"),
-        bool(result.get("pending_spreadsheet_id")),
-    )
-
-    telegram_note = "Connected. Return to Telegram."
+    close_old_connections()
+    telegram_note = "Google connected ✓\nReturn to Telegram and ask me anything."
     try:
         from accounts.models import GoogleService, User
 
@@ -117,7 +84,6 @@ def google_oauth_callback(request):
         service = result.get("service") or GoogleService.DRIVE
         saved = set(result.get("saved_services") or [service])
 
-        # Mark every Atlas Google surface that received tokens as live OAuth.
         if user and GoogleService.GMAIL in saved:
             try:
                 from gmail.models import GmailConnectionMode
@@ -176,84 +142,116 @@ def google_oauth_callback(request):
             )
             if not str(telegram_note).lower().startswith("google connected"):
                 telegram_note = "Google connected ✓\n" + str(telegram_note)
-            msg = (
-                "Google is linked (Calendar, Gmail, Drive & Sheets). "
-                "Return to Telegram — Atlas will use the spreadsheet you shared."
-            )
         elif user and service == GoogleService.GMAIL:
             from gmail.services.gmail_service import GmailService
 
-            gmail = GmailService()
-            resumed = gmail.resume_after_oauth(user)
-            if resumed.get("ok"):
-                msg = (
-                    "Google is linked (Calendar, Gmail, Drive & Sheets). "
-                    "Return to Telegram and ask Atlas to check your email."
-                )
-                telegram_note = resumed.get("reply") or (
-                    "Google connected ✓\nAsk me to check your inbox."
-                )
-            else:
-                msg = resumed.get("reply") or (
-                    "Gmail permission could not be verified. "
-                    "Return to Telegram and reconnect Google with Gmail access."
-                )
-                telegram_note = msg
-                _notify_telegram(result.get("telegram_id"), telegram_note)
-                return HttpResponse(
-                    f"<html><body><h2>Gmail permission needed</h2><p>{msg}</p>"
-                    "<p>You can close this tab and reconnect from Telegram.</p></body></html>",
-                    content_type="text/html",
-                    status=400,
-                )
+            resumed = GmailService().resume_after_oauth(user)
+            telegram_note = resumed.get("reply") or (
+                "Google connected ✓\nAsk me to check your inbox."
+            )
         elif user and service == GoogleService.CALENDAR:
             from gcalendar.services.calendar_service import CalendarService
 
-            calendar = CalendarService()
-            resumed = calendar.resume_after_oauth(user)
-            if resumed.get("ok"):
-                msg = (
-                    "Google is linked (Calendar, Gmail, Drive & Sheets). "
-                    "Return to Telegram — Atlas will use your real schedule."
-                )
-                telegram_note = resumed.get("reply") or (
-                    "Google connected ✓\nAsk me about your schedule."
-                )
-            else:
-                msg = resumed.get("reply") or (
-                    "Calendar permission could not be verified. "
-                    "Return to Telegram and reconnect Google with Calendar access."
-                )
-                telegram_note = msg
-                # Do not show a success page when verification failed
-                _notify_telegram(result.get("telegram_id"), telegram_note)
-                return HttpResponse(
-                    f"<html><body><h2>Calendar permission needed</h2><p>{msg}</p>"
-                    "<p>You can close this tab and reconnect from Telegram.</p></body></html>",
-                    content_type="text/html",
-                    status=400,
-                )
+            resumed = CalendarService().resume_after_oauth(user)
+            telegram_note = resumed.get("reply") or (
+                "Google connected ✓\nAsk me about your schedule."
+            )
         elif user:
             from drive.services.drive_service import DriveService
 
             resumed = DriveService().resume_after_oauth(user)
-            msg = (
-                "Google is linked (Calendar, Gmail, Drive & Sheets). "
-                "Return to Telegram and ask Atlas about your files."
-            )
             telegram_note = resumed.get("reply") or (
                 "Google connected ✓\nAsk me about your files."
             )
-        else:
-            msg = "Connected. Return to Telegram."
     except Exception:  # noqa: BLE001
         logger.exception("event=oauth_post_sync_failed")
-        msg = "Connected. Return to Telegram."
-        telegram_note = "✅ Google connected. Return to Telegram."
+        telegram_note = "Google connected ✓\nReturn to Telegram."
 
     _notify_telegram(result.get("telegram_id"), telegram_note)
-    return HttpResponse(
-        f"<html><body><h2>Connected</h2><p>{msg}</p>"
-        "<p>You can close this tab and return to Telegram.</p></body></html>",
-        content_type="text/html",
-    )
+    close_old_connections()
+
+
+@csrf_exempt
+@require_GET
+def google_oauth_callback(request):
+    """
+    Google redirects here after consent.
+
+    Critical: return HTML quickly. Heavy Calendar/Gmail resume runs in a
+    background thread so Render free-tier proxies do not 502 on slow work.
+    """
+    try:
+        code = (request.GET.get("code") or "").strip()
+        state = (request.GET.get("state") or "").strip()
+        error = (request.GET.get("error") or "").strip()
+        if error:
+            logger.warning("event=oauth_callback_denied error=%s", error[:40])
+            denied = error.lower()
+            if "access_denied" in denied:
+                tip = (
+                    "<p class='warn'>You cancelled Google access.</p>"
+                    "<p>Return to Telegram and tap <b>Connect Google</b> again, "
+                    "then tap <b>Allow</b> on every permission screen.</p>"
+                )
+            else:
+                tip = f"<p class='warn'>Google returned: {error}</p><p>Try Connect Google again from Telegram.</p>"
+            return _html_page("Authorization cancelled", tip)
+
+        if not code or not state:
+            return _html_page(
+                "Link incomplete",
+                "<p>This Google callback is missing data.</p>"
+                "<p>Go back to Telegram and tap <b>Connect Google</b> for a fresh link.</p>",
+                status=400,
+            )
+
+        result = GoogleOAuthService().handle_callback(code=code, state=state)
+        if not result.get("ok"):
+            msg = result.get("error") or "Authorization failed."
+            logger.warning(
+                "event=oauth_callback_failed code=%s",
+                result.get("error_code") or "unknown",
+            )
+            telegram_id = result.get("telegram_id")
+            if telegram_id:
+                _notify_telegram(telegram_id, msg)
+            return _html_page(
+                "Couldn’t finish Google connect",
+                f"<p class='warn'>{msg}</p>"
+                "<p>Return to Telegram and tap <b>Connect Google</b> again.</p>"
+                "<p>If Google showed <i>unverified app</i>, tap "
+                "<b>Advanced → Go to Atlas (unsafe) → Allow</b>.</p>",
+                status=400,
+            )
+
+        logger.info(
+            "event=oauth_callback_ok telegram_id=%s service=%s pending_sheet=%s",
+            result.get("telegram_id"),
+            result.get("service"),
+            bool(result.get("pending_spreadsheet_id")),
+        )
+
+        # Respond immediately — finish Calendar/Gmail resume off the request path.
+        threading.Thread(
+            target=_finish_oauth_background,
+            args=(result,),
+            name="oauth-finish",
+            daemon=True,
+        ).start()
+
+        return _html_page(
+            "Google connected ✓",
+            "<p class='ok'><b>You're all set.</b> Calendar, Gmail, Drive, and Sheets "
+            "are linked for Atlas.</p>"
+            "<p>Return to Telegram — Atlas will continue your request there.</p>",
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("event=oauth_callback_unhandled")
+        # Never 502 — always return a readable page Google/users can see.
+        return _html_page(
+            "Almost there",
+            "<p class='warn'>Google authorization hit a temporary server hiccup.</p>"
+            "<p>Return to Telegram and tap <b>Connect Google</b> once more. "
+            "If it still fails, wait 30 seconds (server wake-up) and retry.</p>",
+            status=200,
+        )
