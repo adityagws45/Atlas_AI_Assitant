@@ -26,6 +26,17 @@ _MOVE = re.compile(
     r")\b",
     re.IGNORECASE,
 )
+# Broad company asks — answer with live quote+news, never wait on Gemini.
+_SIMPLE_COMPANY_ASK = re.compile(
+    r"\b("
+    r"tell me about|what about|how(?:'s| is)|"
+    r"price|quote|stock|shares?|trading|doing|"
+    r"update on|snapshot|quick (?:take|look)|"
+    r"current (?:price|quote)|"
+    r"market cap|p\s*/\s*e|valuation"
+    r")\b",
+    re.IGNORECASE,
+)
 _MARKET_WIDE = re.compile(
     r"\b(market update|quick (?:market )?update|what'?s (?:the )?market|"
     r"how'?s the market)\b",
@@ -33,6 +44,14 @@ _MARKET_WIDE = re.compile(
 )
 _EXPLAIN = re.compile(
     r"\b(explain|like i'?m a beginner|teach me|what is a |what is an )\b",
+    re.IGNORECASE,
+)
+_SKIP_TO_AI = re.compile(
+    r"\b("
+    r"compare|versus|vs\.?|email|inbox|gmail|calendar|schedule|"
+    r"spreadsheet|sheet|portfolio|pdf|document|report|filing|"
+    r"briefing|alert me|remind"
+    r")\b",
     re.IGNORECASE,
 )
 
@@ -80,7 +99,25 @@ def try_market_move_fast_answer(
     q = (text or "").strip()
     if not q or _EXPLAIN.search(q):
         return None
-    if not _MOVE.search(q):
+    if _SKIP_TO_AI.search(q) and not _MOVE.search(q):
+        # Let dedicated routers handle compare / gmail / calendar / docs
+        if not _SIMPLE_COMPANY_ASK.search(q):
+            return None
+
+    symbol = resolve_symbol(q)
+    if not symbol:
+        syms = resolve_symbols(q)
+        symbol = syms[0] if syms else None
+    if not symbol:
+        symbol = (default_symbol or "").strip().upper() or None
+
+    # Enter fast path if classic "what's happening" OR any simple company ask with a ticker
+    # OR a very short ticker/company ping ("NVDA?", "Nvidia")
+    words = len(q.split())
+    enter = bool(_MOVE.search(q)) or bool(
+        symbol and (_SIMPLE_COMPANY_ASK.search(q) or words <= 4)
+    )
+    if not enter:
         return None
 
     t0 = time.perf_counter()
@@ -117,12 +154,6 @@ def try_market_move_fast_answer(
             },
         }
 
-    symbol = resolve_symbol(q)
-    if not symbol:
-        syms = resolve_symbols(q)
-        symbol = syms[0] if syms else None
-    if not symbol:
-        symbol = (default_symbol or "").strip().upper() or None
     if not symbol:
         return None
 
