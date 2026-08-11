@@ -62,9 +62,9 @@ def resolve_symbol(text: str) -> str | None:
         return direct
 
     lower = raw.lower()
-    for name, ticker in sorted(COMPANY_ALIASES.items(), key=lambda x: -len(x[0])):
-        if re.search(rf"\b{re.escape(name)}\b", lower):
-            return ticker
+    hit = _match_company_alias(lower)
+    if hit:
+        return hit
 
     # Extract ticker-like token from sentence
     for token in re.findall(r"\b[A-Za-z]{1,5}\b", raw):
@@ -84,6 +84,17 @@ def resolve_symbol(text: str) -> str | None:
     return None
 
 
+def _match_company_alias(lower: str) -> str | None:
+    """Match company names, including common possessives/typos (nvidias, nvidia's)."""
+    for name, ticker in sorted(COMPANY_ALIASES.items(), key=lambda x: -len(x[0])):
+        if re.search(rf"\b{re.escape(name)}\b", lower):
+            return ticker
+        # "nvidias current price" / "nvidia's price" (missing or present apostrophe)
+        if re.search(rf"\b{re.escape(name)}(?:['’]?s)\b", lower):
+            return ticker
+    return None
+
+
 def resolve_symbols(text: str, *, limit: int = 5) -> list[str]:
     raw = (text or "").strip()
     if not raw:
@@ -91,7 +102,10 @@ def resolve_symbols(text: str, *, limit: int = 5) -> list[str]:
     found: list[str] = []
     lower = raw.lower()
     for name, ticker in sorted(COMPANY_ALIASES.items(), key=lambda x: -len(x[0])):
-        if re.search(rf"\b{re.escape(name)}\b", lower) and ticker not in found:
+        if (
+            re.search(rf"\b{re.escape(name)}\b", lower)
+            or re.search(rf"\b{re.escape(name)}(?:['’]?s)\b", lower)
+        ) and ticker not in found:
             found.append(ticker)
             if len(found) >= limit:
                 return found

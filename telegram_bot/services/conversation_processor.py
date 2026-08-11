@@ -41,6 +41,7 @@ RESTART_PHRASES = {
 }
 
 MAX_STORE_CHARS = 4000
+ORCHESTRATOR_TIMEOUT_SECONDS = 28
 
 
 class ConversationProcessor:
@@ -56,6 +57,35 @@ class ConversationProcessor:
         self.sheets = SheetService()
         self.gmail = GmailService()
         self.calendar = CalendarService()
+
+    def _orchestrator_process_safe(self, user, conversation, text: str) -> dict:
+        """Never hang the webhook forever if Gemini stalls."""
+        from concurrent.futures import ThreadPoolExecutor
+        from concurrent.futures import TimeoutError as FuturesTimeout
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            fut = pool.submit(self.orchestrator.process, user, conversation, text)
+            try:
+                return fut.result(timeout=ORCHESTRATOR_TIMEOUT_SECONDS)
+            except FuturesTimeout:
+                logger.warning(
+                    "event=orchestrator_timeout telegram_id=%s chars=%s",
+                    getattr(user, "telegram_id", None),
+                    len(text or ""),
+                )
+                return {
+                    "reply": FRIENDLY_ERROR,
+                    "metadata": {"pipeline": "ai_timeout", "ok": False},
+                }
+            except Exception:
+                logger.exception(
+                    "event=orchestrator_crash telegram_id=%s",
+                    getattr(user, "telegram_id", None),
+                )
+                return {
+                    "reply": FRIENDLY_ERROR,
+                    "metadata": {"pipeline": "ai_error", "ok": False},
+                }
 
     def handle_start(
         self,
@@ -471,7 +501,7 @@ class ConversationProcessor:
             ):
                 if not user.onboarding_completed:
                     self.onboarding._soft_complete(user)
-                ai_result = self.orchestrator.process(user, conversation, text)
+                ai_result = self._orchestrator_process_safe(user, conversation, text)
                 reply = ai_result["reply"]
                 metadata = {"onboarding": False, **(ai_result.get("metadata") or {})}
                 MessageService.save_assistant_message(
@@ -741,7 +771,7 @@ class ConversationProcessor:
                                             user, symbol=str(sym), topic="finance"
                                         )
                                 else:
-                                    ai_result = self.orchestrator.process(
+                                    ai_result = self._orchestrator_process_safe(
                                         user, conversation, text
                                     )
                                     reply = ai_result["reply"]
