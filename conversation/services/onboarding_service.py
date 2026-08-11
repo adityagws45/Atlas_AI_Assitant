@@ -267,9 +267,15 @@ class OnboardingService:
         name = (user.first_name or "").strip()
         hi = f"Hi {name}!" if name else "Hi!"
         return (
-            f"{hi} I'm Atlas.\n\n"
-            "I'll help you stay on top of the companies and markets that matter most to you.\n\n"
-            "A few quick things so I can tailor research and briefings — "
+            f"{hi} I'm *Atlas* — your AI financial analyst inside Telegram.\n\n"
+            "I can help you with:\n"
+            "• Live stocks, news & company comparisons\n"
+            "• Your watchlist & personalized briefings\n"
+            "• Google Calendar, Gmail, Drive & Sheets (one Connect)\n"
+            "• PDF/DOCX reports — upload and ask questions\n"
+            "• Voice notes (I'll transcribe and answer)\n\n"
+            "No menus or slash commands — just talk naturally.\n\n"
+            "A few quick things so I can tailor research — "
             "we can skip anything and fill in the rest later.\n\n"
             "What best describes you?\n"
             "Investor, analyst, founder, finance professional, student — or something else?"
@@ -283,28 +289,23 @@ class OnboardingService:
         sectors = list((prefs.sectors_of_interest if prefs else []) or [])[:3]
         name = (user.first_name or "").strip() or "there"
 
-        if symbols and sectors:
-            focus = f"{', '.join(symbols)} and {sectors[0]}"
-        elif symbols:
-            focus = ", ".join(symbols)
-        elif sectors:
-            focus = f"{sectors[0]} names"
-        elif user.role:
-            focus = user.get_role_display().lower() if hasattr(user, "get_role_display") else user.role
-            return (
-                f"Welcome back, {name}. Still covering you as a {focus}.\n\n"
-                "What should we look at today? "
-                "Or say restart to redo the intro."
-            )
-        else:
-            return (
-                f"Welcome back, {name}.\n\n"
-                "What should we look at today? "
-                "Or say restart to redo the intro."
-            )
+        focus_bits: list[str] = []
+        if symbols:
+            focus_bits.append(", ".join(symbols))
+        if sectors:
+            focus_bits.append(sectors[0])
+        focus_line = ""
+        if focus_bits:
+            focus_line = f"Still tracking *{' / '.join(focus_bits)}*.\n\n"
 
         return (
-            f"Welcome back, {name}. Still tracking {focus}.\n\n"
+            f"Welcome back, {name}. I'm *Atlas* — your AI financial analyst.\n\n"
+            f"{focus_line}"
+            "Ask me anything:\n"
+            "• Market moves & comparisons (*What's happening with Nvidia?*)\n"
+            "• Calendar / Gmail / Sheets (Connect Google once)\n"
+            "• Upload a PDF/DOCX report and ask for a summary\n"
+            "• Or send a voice note\n\n"
             "What should we dig into?"
         )
 

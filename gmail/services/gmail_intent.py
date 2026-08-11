@@ -30,7 +30,8 @@ CHECK = re.compile(
     r"check( my)? (e)?mail|check( my)? (gmail|inbox)|"
     r"what'?s? in (my )?(inbox|email)|"
     r"look at (my )?(inbox|email|emails)|"
-    r"show( me)?( my)? (inbox|emails?)"
+    r"show( me)?( my)? (inbox|emails?|current emails?|mails?)|"
+    r"my (current )?emails?"
     r")\b",
     re.IGNORECASE,
 )

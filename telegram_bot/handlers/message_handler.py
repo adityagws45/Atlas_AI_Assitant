@@ -339,7 +339,7 @@ async def handle_photo_or_document(
         )
         await _safe_reply(
             update,
-            "I analyze financial documents as PDF/TXT/Markdown for now — "
+            "I analyze financial documents as PDF/DOCX/TXT for now — "
             "send the filing as a file and I'll dig in.",
             context,
         )
@@ -349,54 +349,142 @@ async def handle_photo_or_document(
     if not doc:
         await _safe_reply(
             update,
-            "Send a PDF, TXT, or Markdown filing and I'll analyze it.",
+            "Send a PDF, DOCX, TXT, or Markdown filing and I'll analyze it.",
             context,
         )
         return
 
     filename = doc.file_name or "document.pdf"
+    chat_id = update.effective_chat.id if update.effective_chat else update.message.chat_id
     logger.info(
         "event=incoming_document telegram_id=%s name=%s size=%s",
         update.effective_user.id,
         filename[:80],
         doc.file_size,
     )
-    # UX: never leave the user hanging — acknowledge immediately, then process.
+    # Acknowledge immediately; process in a background thread so other chats
+    # (calendar/gmail/finance) are never blocked behind a large DOCX/PDF.
     await _safe_reply(
         update,
-        "Got it — processing the report.",
+        "Got it — processing the report in the background. "
+        "You can keep chatting; I'll ping you when it's ready.",
         context,
     )
     try:
         await TelegramAdapter.send_typing(update.message)
         tg_file = await context.bot.get_file(doc.file_id)
         file_bytes = bytes(await tg_file.download_as_bytearray())
-        reply = await _handle_document_sync(
-            **_user_kwargs(update),
-            file_bytes=file_bytes,
-            filename=filename,
-            mime_type=doc.mime_type or "",
-            telegram_message_id=update.message.message_id,
-        )
-        await TelegramAdapter.send_typing(update.message)
-        await _safe_reply(update, reply, context)
     except Exception:
         logger.exception(
-            "event=handler_document_error telegram_id=%s",
+            "event=handler_document_download_error telegram_id=%s",
             update.effective_user.id,
         )
-        lower_name = filename.lower()
-        if lower_name.endswith(".pdf") or "pdf" in (doc.mime_type or "").lower():
-            err = (
-                "📄 I received the document, but I couldn't process this PDF. "
-                "Please try another PDF."
+        await _safe_reply(
+            update,
+            "📄 I couldn't download that file. Please try uploading it again.",
+            context,
+        )
+        return
+
+    user_kw = _user_kwargs(update)
+    _spawn_document_job(
+        chat_id=int(chat_id),
+        file_bytes=file_bytes,
+        filename=filename,
+        mime_type=doc.mime_type or "",
+        telegram_message_id=update.message.message_id,
+        **user_kw,
+    )
+
+
+def _spawn_document_job(
+    *,
+    chat_id: int,
+    telegram_id: int,
+    file_bytes: bytes,
+    filename: str,
+    mime_type: str = "",
+    username: str = "",
+    first_name: str = "",
+    last_name: str = "",
+    telegram_message_id: int | None = None,
+) -> None:
+    import threading
+
+    def _run() -> None:
+        from django.db import close_old_connections
+
+        close_old_connections()
+        try:
+            reply = _processor.handle_document(
+                telegram_id=telegram_id,
+                file_bytes=file_bytes,
+                filename=filename,
+                mime_type=mime_type,
+                username=username,
+                first_name=first_name,
+                last_name=last_name,
+                telegram_message_id=telegram_message_id,
             )
-        else:
-            err = (
-                "📄 I received the document, but I couldn't process it. "
-                "Try a text-based PDF, TXT, or Markdown export."
+        except Exception:
+            logger.exception("event=document_bg_failed telegram_id=%s", telegram_id)
+            lower_name = (filename or "").lower()
+            if lower_name.endswith(".pdf") or "pdf" in (mime_type or "").lower():
+                reply = (
+                    "📄 I received the document, but I couldn't process this PDF. "
+                    "Please try another PDF."
+                )
+            else:
+                reply = (
+                    "📄 I received the document, but I couldn't process it. "
+                    "Try a text-based PDF, DOCX, TXT, or Markdown export."
+                )
+        _push_telegram_text(chat_id, reply or "Document ready.")
+        close_old_connections()
+
+    threading.Thread(
+        target=_run, name=f"doc-ingest-{telegram_id}", daemon=True
+    ).start()
+
+
+def _push_telegram_text(chat_id: int, text: str) -> None:
+    """Best-effort outbound message from a background thread (no PTB loop)."""
+    import httpx
+
+    token = (getattr(settings, "TELEGRAM_BOT_TOKEN", "") or "").strip()
+    if not token or not chat_id:
+        return
+    body = (text or "").strip() or "Document ready."
+    try:
+        from telegram_bot.adapters.telegram_adapter import (
+            prepare_telegram_markdown,
+            scrub_oauth_urls_for_display,
+        )
+
+        display = scrub_oauth_urls_for_display(body)
+        payload = {
+            "chat_id": int(chat_id),
+            "text": prepare_telegram_markdown(display)[:4000],
+            "parse_mode": "Markdown",
+            "disable_web_page_preview": True,
+        }
+        resp = httpx.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json=payload,
+            timeout=30,
+        )
+        if resp.status_code >= 400:
+            httpx.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json={
+                    "chat_id": int(chat_id),
+                    "text": strip_telegram_markup(body)[:4000],
+                    "disable_web_page_preview": True,
+                },
+                timeout=30,
             )
-        await _safe_reply(update, err, context)
+    except Exception:
+        logger.exception("event=document_bg_notify_failed chat_id=%s", chat_id)
 
 
 @sync_to_async

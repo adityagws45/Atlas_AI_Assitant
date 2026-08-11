@@ -261,6 +261,8 @@ class ConversationProcessor:
         if not text:
             return "I didn't catch that — mind sending it again in a line or two?"
 
+        text = _normalize_user_typos(text)
+
         if len(text) > MAX_STORE_CHARS:
             text = text[:MAX_STORE_CHARS]
 
@@ -437,9 +439,31 @@ class ConversationProcessor:
                 one = resolve_symbol(text)
                 if not named and one:
                     named = [one]
+                # "What about Microsoft? How does it compare" after NVDA/AMD chat
+                if len(named) < 2 and re.search(
+                    r"\b(compare|vs\.?|versus|compared (to|with)|how does it compare)\b",
+                    text,
+                    re.I,
+                ):
+                    ctx = entities.get(user)
+                    prior = (ctx.get("current_ticker") or "").strip().upper()
+                    alts = [
+                        str(a).upper()
+                        for a in (ctx.get("alt_tickers") or [])
+                        if a
+                    ]
+                    for sym in ([prior] + alts):
+                        if sym and sym not in named:
+                            named.append(sym)
+                        if len(named) >= 2:
+                            break
                 if (
                     len(named) >= 2
-                    and re.search(r"\b(compare|vs\.?|versus)\b", text, re.I)
+                    and re.search(
+                        r"\b(compare|vs\.?|versus|compared (to|with)|how does it compare)\b",
+                        text,
+                        re.I,
+                    )
                     and not re.search(
                         r"\b(sheet|spreadsheet|portfolio|holding)\b", text, re.I
                     )
@@ -462,6 +486,54 @@ class ConversationProcessor:
                         False,
                         True,
                         len(text),
+                    )
+                    return reply
+
+            # Active PDF/DOCX Q&A BEFORE Sheets — an open spreadsheet must never
+            # steal "give me summary of report" after an upload.
+            if user.onboarding_completed and (
+                is_document_question(text)
+                or is_document_compare(text)
+                or _looks_like_doc_followup(text)
+            ):
+                if self.doc_memory.processing_document_ids(user):
+                    self.doc_memory.remember_pending_question(user, text)
+                    reply = (
+                        "Still processing your report — I'll answer as soon as it's ready "
+                        "(usually under a minute)."
+                    )
+                    MessageService.save_assistant_message(
+                        conversation,
+                        reply,
+                        metadata={
+                            "onboarding": False,
+                            "pipeline": "document_pending",
+                            "ok": True,
+                            "queued": True,
+                        },
+                    )
+                    return reply
+                active_ids = self.doc_memory.active_document_ids(user)
+                if active_ids:
+                    qa = self.doc_qa.answer(
+                        user,
+                        text,
+                        document_ids=active_ids,
+                        compare=is_document_compare(text),
+                    )
+                    reply = self.orchestrator.formatter.format(
+                        qa.get("reply")
+                        or "I couldn't pull a clean take from the report."
+                    )
+                    MessageService.save_assistant_message(
+                        conversation,
+                        reply,
+                        metadata={
+                            "onboarding": False,
+                            "pipeline": "document_qa",
+                            "ok": bool(qa.get("ok")),
+                            "document_ids": qa.get("document_ids") or active_ids,
+                        },
                     )
                     return reply
 
@@ -512,53 +584,6 @@ class ConversationProcessor:
                     len(text),
                 )
                 return reply
-
-            # Active PDF/report Q&A before Drive — "What is this document about?"
-            # must never become a Drive OAuth prompt.
-            if user.onboarding_completed and (
-                is_document_question(text)
-                or is_document_compare(text)
-                or _looks_like_doc_followup(text)
-            ):
-                if self.doc_memory.processing_document_ids(user):
-                    self.doc_memory.remember_pending_question(user, text)
-                    reply = (
-                        "Still processing the report — I'll answer as soon as it's ready."
-                    )
-                    MessageService.save_assistant_message(
-                        conversation,
-                        reply,
-                        metadata={
-                            "onboarding": False,
-                            "pipeline": "document_pending",
-                            "ok": True,
-                            "queued": True,
-                        },
-                    )
-                    return reply
-                active_ids = self.doc_memory.active_document_ids(user)
-                if active_ids:
-                    qa = self.doc_qa.answer(
-                        user,
-                        text,
-                        document_ids=active_ids,
-                        compare=is_document_compare(text),
-                    )
-                    reply = self.orchestrator.formatter.format(
-                        qa.get("reply")
-                        or "I couldn't pull a clean take from the report."
-                    )
-                    MessageService.save_assistant_message(
-                        conversation,
-                        reply,
-                        metadata={
-                            "onboarding": False,
-                            "pipeline": "document_qa",
-                            "ok": bool(qa.get("ok")),
-                            "document_ids": qa.get("document_ids") or active_ids,
-                        },
-                    )
-                    return reply
 
             # Drive library intents beat preference/sector short-circuits
             drive_intent = (
@@ -761,6 +786,22 @@ def _normalize_phrase(text: str) -> str:
     return re.sub(r"\s+", " ", text.strip().lower())
 
 
+def _normalize_user_typos(text: str) -> str:
+    """Fix common demo typos so intents still fire (e.g. emsails → emails)."""
+    out = text or ""
+    replacements = (
+        (r"\bemsails?\b", "emails"),
+        (r"\bemaills?\b", "emails"),
+        (r"\bmials?\b", "mails"),
+        (r"\bsho+w\b", "show"),
+        (r"\bcalender\b", "calendar"),
+        (r"\bschedueld\b", "scheduled"),
+    )
+    for pat, repl in replacements:
+        out = re.sub(pat, repl, out, flags=re.IGNORECASE)
+    return out
+
+
 def _document_ready_reply(doc) -> str:
     """Telegram-ready completion message after successful ingestion."""
     from documents.models import DocumentKind
@@ -831,12 +872,8 @@ def _should_defer_sheet_to_documents(
     sheet_memory,
 ) -> bool:
     """
-    Ambiguous risk/summary phrasing matches both Sheets and Documents.
-    Prefer an already-active filing when the user is talking about the report,
-    or when no portfolio sheet has been opened yet.
-
-    Never defer an explicit Sheets URL. Prefer the ACTIVE sheet when one is set
-    unless the user clearly references a filing/document.
+    Prefer an active/processing filing over Sheets for report-style questions.
+    Never defer an explicit Sheets URL or explicit sheet/portfolio phrasing.
     """
     if getattr(sheet_intent, "kind", "") == "open_url":
         return False
@@ -852,23 +889,24 @@ def _should_defer_sheet_to_documents(
         return False
     if _SHEET_EXPLICIT.search(text or ""):
         return False
-    if sheet_memory.active_workbook_id(user) and not (
-        _DOC_CONTEXT_CUES.search(text or "") or _looks_like_doc_followup(text)
-    ):
-        # Active sheet owns follow-ups unless the user is clearly asking about a filing
+
+    active_docs = list(doc_memory.active_document_ids(user) or [])
+    processing = list(doc_memory.processing_document_ids(user) or [])
+    if not active_docs and not processing:
         return False
-    active_docs = doc_memory.active_document_ids(user)
-    if not active_docs:
-        return False
-    if not (
+
+    reportish = bool(
         is_document_question(text)
         or _DOC_CONTEXT_CUES.search(text or "")
         or _looks_like_doc_followup(text)
-    ):
-        return False
-    if _DOC_CONTEXT_CUES.search(text or "") or _looks_like_doc_followup(text):
-        return True
-    return not sheet_memory.active_workbook_id(user)
+        or re.search(
+            r"\b(report|filing|pdf|docx|document|10[\s\-]?k|annual)\b",
+            text or "",
+            re.I,
+        )
+    )
+    # Active document + report language always beats an open sheet.
+    return reportish
 
 
 def _looks_like_doc_followup(text: str) -> bool:
@@ -894,8 +932,12 @@ def _looks_like_doc_followup(text: str) -> bool:
             "net income",
             "this report",
             "the report",
+            "of report",
+            "of the report",
+            "summary of report",
             "this document",
             "this pdf",
             "this filing",
+            "annual report",
         )
     )

@@ -19,7 +19,9 @@ DOC_QUESTION = re.compile(
     r"which section|section discusses|"
     r"what (is|does) (this|the|my) (document|pdf|file|report|filing)|"
     r"(this|the) (document|pdf|file) (about|say|cover)|"
-    r"tell me about (this|the) (document|pdf|file|report)"
+    r"tell me about (this|the) (document|pdf|file|report)|"
+    r"(give me |provide )?(a |the )?summary (of |for )?(the |this |my )?(report|document|pdf|filing|docx)|"
+    r"summary of (the )?report|summarize (the )?report"
     r")\b",
     re.IGNORECASE,
 )

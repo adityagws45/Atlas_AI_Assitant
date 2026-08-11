@@ -345,18 +345,28 @@ def format_finance_digest(
 def _format_items(
     items: list[dict[str, Any]], *, start: int = 1, include_why: bool = True
 ) -> list[str]:
+    import html as html_lib
+
     lines: list[str] = []
     for i, m in enumerate(items, start):
-        subj = m.get("subject") or "(no subject)"
-        frm = m.get("from_name") or m.get("from_email") or "Unknown"
+        subj = html_lib.unescape(str(m.get("subject") or "(no subject)"))
+        frm = html_lib.unescape(
+            str(m.get("from_name") or m.get("from_email") or "Unknown")
+        )
         when = m.get("received_display") or m.get("received_at") or ""
-        why = m.get("why") or ""
+        why = html_lib.unescape(str(m.get("why") or ""))
+        snip = html_lib.unescape(str(m.get("snippet") or ""))
         lines.append(f"{i}. *{subj}*")
         lines.append(f"   From: {frm}")
         if when:
             lines.append(f"   Time: {when}")
         if include_why and why:
             lines.append(f"   Why it matters: {why}")
+        if snip and include_why:
+            # Keep snippet short and clean for Telegram
+            clean = re.sub(r"\s+", " ", snip).strip()[:160]
+            if clean:
+                lines.append(f"   Snippet: {clean}")
         if m.get("has_finance_attachment") or (
             m.get("has_attachment")
             and float(m.get("finance_score") or 0) >= FINANCE_THRESHOLD
