@@ -370,6 +370,19 @@ async def handle_photo_or_document(
         "You can keep chatting; I'll ping you when it's ready.",
         context,
     )
+    # Mark ingest pending BEFORE download so "analyse it" mid-wait doesn't
+    # claim "no report loaded".
+    try:
+        from accounts.services.user_service import UserService
+        from documents.services.document_memory import DocumentMemory
+
+        user, _ = UserService.get_or_create_from_telegram(**_user_kwargs(update))
+        DocumentMemory().mark_ingest_pending(user, filename=filename)
+    except Exception:
+        logger.exception(
+            "event=doc_ingest_pending_mark_failed telegram_id=%s",
+            update.effective_user.id,
+        )
     try:
         await TelegramAdapter.send_typing(update.message)
         tg_file = await context.bot.get_file(doc.file_id)
@@ -379,6 +392,14 @@ async def handle_photo_or_document(
             "event=handler_document_download_error telegram_id=%s",
             update.effective_user.id,
         )
+        try:
+            from accounts.services.user_service import UserService
+            from documents.services.document_memory import DocumentMemory
+
+            user, _ = UserService.get_or_create_from_telegram(**_user_kwargs(update))
+            DocumentMemory().clear_ingest_pending(user)
+        except Exception:
+            pass
         await _safe_reply(
             update,
             "📄 I couldn't download that file. Please try uploading it again.",

@@ -21,7 +21,10 @@ DOC_QUESTION = re.compile(
     r"(this|the) (document|pdf|file) (about|say|cover)|"
     r"tell me about (this|the) (document|pdf|file|report)|"
     r"(give me |provide )?(a |the )?summary (of |for )?(the |this |my )?(report|document|pdf|filing|docx)|"
-    r"summary of (the )?report|summarize (the )?report"
+    r"summary of (the )?report|summarize (the )?report|"
+    r"analy[sz]e\s+(it|this|that|the\s+(report|document|pdf|file|filing))|"
+    r"analy[sz]e\s+it\s+properly|dig\s+into\s+(it|the\s+report)|"
+    r"review\s+(it|this|the\s+(report|document))"
     r")\b",
     re.IGNORECASE,
 )

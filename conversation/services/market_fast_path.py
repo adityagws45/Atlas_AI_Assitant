@@ -54,6 +54,11 @@ _SKIP_TO_AI = re.compile(
     r")\b",
     re.IGNORECASE,
 )
+_SHEETS_CONTEXT = re.compile(
+    r"docs\.google\.com/spreadsheets|sheets\.google\.com|"
+    r"\bgoogle\s+sheets?\b",
+    re.IGNORECASE,
+)
 
 
 def _attr(obj: Any, *names: str) -> Any:
@@ -98,6 +103,8 @@ def try_market_move_fast_answer(
     """
     q = (text or "").strip()
     if not q or _EXPLAIN.search(q):
+        return None
+    if _SHEETS_CONTEXT.search(q):
         return None
     if _SKIP_TO_AI.search(q) and not _MOVE.search(q):
         # Let dedicated routers handle compare / gmail / calendar / docs

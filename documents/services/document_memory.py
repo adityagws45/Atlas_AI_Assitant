@@ -16,6 +16,7 @@ logger = logging.getLogger("atlas.documents.memory")
 ACTIVE_KEY = "active_documents"
 RECENT_KEY = "recent_documents"
 PENDING_Q_KEY = "pending_document_question"
+INGEST_PENDING_KEY = "document_ingest_pending"
 
 
 class DocumentMemory:
@@ -99,6 +100,27 @@ class DocumentMemory:
         data = self._get(user, PENDING_Q_KEY) or {}
         AssistantMemory.objects.filter(user=user, key=PENDING_Q_KEY).delete()
         return str(data.get("question") or "")
+
+    def mark_ingest_pending(self, user: User, *, filename: str = "") -> None:
+        """Flag that a Telegram upload is downloading/ingesting (before DB row exists)."""
+        self._set(
+            user,
+            INGEST_PENDING_KEY,
+            {
+                "filename": (filename or "")[:180],
+                "updated_at": timezone.now().isoformat(),
+            },
+            memory_type=MemoryType.CONTEXT,
+        )
+
+    def clear_ingest_pending(self, user: User) -> None:
+        AssistantMemory.objects.filter(user=user, key=INGEST_PENDING_KEY).delete()
+
+    def is_ingest_pending(self, user: User) -> bool:
+        return bool(self._get(user, INGEST_PENDING_KEY))
+
+    def has_document_in_flight(self, user: User) -> bool:
+        return self.is_ingest_pending(user) or bool(self.processing_document_ids(user))
 
     def processing_document_ids(self, user: User) -> list[str]:
         return [

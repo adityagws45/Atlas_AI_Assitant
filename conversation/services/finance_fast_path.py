@@ -73,6 +73,12 @@ def try_finance_fast_answer(
     q = (text or "").strip()
     if not q or _EXPLAIN.search(q):
         return None
+    if re.search(
+        r"docs\.google\.com/spreadsheets|sheets\.google\.com|\bgoogle\s+sheets?\b",
+        q,
+        re.I,
+    ):
+        return None
 
     symbol = resolve_symbol(q)
     if not symbol:

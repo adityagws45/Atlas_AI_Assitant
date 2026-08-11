@@ -41,7 +41,8 @@ OPEN = re.compile(
     r"\b("
     r"open( my)? (portfolio|spreadsheet|sheet|watchlist)|"
     r"load( my)? (portfolio|spreadsheet|sheet)|"
-    r"analyze( this| my)? (spreadsheet|sheet|portfolio)|"
+    r"analy[sz]e(?:\s+(?:this|my|the|a))?(?:\s+google)?\s+(spreadsheets?|sheets?|portfolio)|"
+    r"google\s+sheets?(?:\s+link)?|"
     r"use( my)? (portfolio|spreadsheet)"
     r")\b",
     re.IGNORECASE,
@@ -52,8 +53,9 @@ SUMMARY = re.compile(
     r"summarize( my)? (portfolio|spreadsheet|sheet)|"
     r"portfolio summary|sheet summary|"
     r"what stands out|total portfolio value|calculate total|"
-    r"analyze this sheet|analyze the sheet|analyze that sheet|"
-    r"analyze this one|analyze that one|analyze it"
+    r"analy[sz]e this sheet|analy[sz]e the sheet|analy[sz]e that sheet|"
+    r"analy[sz]e (this|that) (google )?sheets?|"
+    r"analy[sz]e google sheets?|analy[sz]e (this|that) one|analy[sz]e it"
     r")\b",
     re.IGNORECASE,
 )

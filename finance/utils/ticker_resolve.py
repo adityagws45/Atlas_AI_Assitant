@@ -56,6 +56,15 @@ def resolve_symbol(text: str) -> str | None:
     if not raw:
         return None
 
+    # Google Sheets / Docs URLs and "google sheet" phrasing are not Alphabet.
+    if re.search(
+        r"docs\.google\.com/spreadsheets|sheets\.google\.com|"
+        r"\bgoogle\s+sheets?\b",
+        raw,
+        re.I,
+    ):
+        return None
+
     # Direct ticker
     direct = normalize_symbol(raw)
     if re.fullmatch(r"[A-Z]{1,5}(?:-[A-Z])?", direct):
@@ -86,11 +95,13 @@ def resolve_symbol(text: str) -> str | None:
 
 def _match_company_alias(lower: str) -> str | None:
     """Match company names, including common possessives/typos (nvidias, nvidia's)."""
+    # Avoid "google" inside "google sheet(s)"
+    scrubbed = re.sub(r"\bgoogle\s+sheets?\b", " ", lower)
     for name, ticker in sorted(COMPANY_ALIASES.items(), key=lambda x: -len(x[0])):
-        if re.search(rf"\b{re.escape(name)}\b", lower):
+        if re.search(rf"\b{re.escape(name)}\b", scrubbed):
             return ticker
         # "nvidias current price" / "nvidia's price" (missing or present apostrophe)
-        if re.search(rf"\b{re.escape(name)}(?:['’]?s)\b", lower):
+        if re.search(rf"\b{re.escape(name)}(?:['’]?s)\b", scrubbed):
             return ticker
     return None
 
@@ -99,8 +110,15 @@ def resolve_symbols(text: str, *, limit: int = 5) -> list[str]:
     raw = (text or "").strip()
     if not raw:
         return []
+    if re.search(
+        r"docs\.google\.com/spreadsheets|sheets\.google\.com|"
+        r"\bgoogle\s+sheets?\b",
+        raw,
+        re.I,
+    ):
+        return []
     found: list[str] = []
-    lower = raw.lower()
+    lower = re.sub(r"\bgoogle\s+sheets?\b", " ", raw.lower())
     for name, ticker in sorted(COMPANY_ALIASES.items(), key=lambda x: -len(x[0])):
         if (
             re.search(rf"\b{re.escape(name)}\b", lower)

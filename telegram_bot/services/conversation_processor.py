@@ -207,6 +207,7 @@ class ConversationProcessor:
                     source=DocumentSource.TELEGRAM,
                 )
             except ValueError as exc:
+                self.doc_memory.clear_ingest_pending(user)
                 raw = str(exc).strip()
                 reply = raw if raw.startswith("📄") else f"📄 {raw}"
                 MessageService.save_assistant_message(
@@ -216,10 +217,13 @@ class ConversationProcessor:
                 )
                 return reply
 
+            self.doc_memory.clear_ingest_pending(user)
             self.doc_memory.remember_upload(user, doc)
             # Answer a question queued while the PDF was still processing
             pending_q = self.doc_memory.pop_pending_question(user)
-            if pending_q and is_document_question(pending_q):
+            if pending_q and (
+                is_document_question(pending_q) or _looks_like_doc_followup(pending_q)
+            ):
                 qa = self.doc_qa.answer(
                     user,
                     pending_q,
@@ -260,9 +264,29 @@ class ConversationProcessor:
             return reply
         except OperationalError:
             logger.exception("event=document_db_error telegram_id=%s", telegram_id)
+            try:
+                user, _ = UserService.get_or_create_from_telegram(
+                    telegram_id=telegram_id,
+                    username=username,
+                    first_name=first_name,
+                    last_name=last_name,
+                )
+                self.doc_memory.clear_ingest_pending(user)
+            except Exception:
+                pass
             return FRIENDLY_ERROR
         except Exception:
             logger.exception("event=document_error telegram_id=%s", telegram_id)
+            try:
+                user, _ = UserService.get_or_create_from_telegram(
+                    telegram_id=telegram_id,
+                    username=username,
+                    first_name=first_name,
+                    last_name=last_name,
+                )
+                self.doc_memory.clear_ingest_pending(user)
+            except Exception:
+                pass
             lower = (filename or "").lower()
             if lower.endswith(".pdf") or "pdf" in (mime_type or "").lower():
                 return (
@@ -404,6 +428,86 @@ class ConversationProcessor:
                 )
                 return reply
 
+            # Pasted Google Sheets URL / "analyze google sheet" BEFORE market
+            # fast-path — otherwise "docs.google.com" resolves as Alphabet (GOOGL).
+            from sheets.services.sheet_intent import extract_spreadsheet_id
+
+            sheet_url_id = extract_spreadsheet_id(text)
+            google_sheet_ask = bool(
+                re.search(r"\bgoogle\s+sheets?\b", text or "", re.I)
+            )
+            early_sheet = (
+                detect_sheet_intent(
+                    text,
+                    has_active_sheet=bool(
+                        self.sheets.memory.active_workbook_id(user)
+                    ),
+                )
+                if user.onboarding_completed
+                else None
+            )
+            if user.onboarding_completed and (
+                sheet_url_id
+                or google_sheet_ask
+                or (
+                    early_sheet is not None
+                    and early_sheet.kind in {"open_url", "open", "connect", "list"}
+                )
+            ):
+                sheet_result = self.sheets.handle_intent(user, text) or {}
+                reply = self.orchestrator.formatter.format(
+                    sheet_result.get("reply")
+                    or "I couldn't complete that spreadsheet request."
+                )
+                metadata = {
+                    "onboarding": False,
+                    "pipeline": "sheets",
+                    "ok": bool(sheet_result.get("ok")),
+                    "sheet_intent": (
+                        (early_sheet.kind if early_sheet and early_sheet.kind != "none" else None)
+                        or ("open_url" if sheet_url_id else "open")
+                    ),
+                    "needs_oauth": bool(sheet_result.get("needs_oauth")),
+                }
+                MessageService.save_assistant_message(
+                    conversation, reply, metadata=metadata
+                )
+                logger.info(
+                    "event=text_ok telegram_id=%s onboarding=%s ai=%s chars=%s",
+                    telegram_id,
+                    False,
+                    True,
+                    len(text),
+                )
+                return reply
+
+            # While a DOCX/PDF is still downloading/ingesting, queue analysis asks
+            # immediately — do not claim "no report loaded" or invent stock answers.
+            if user.onboarding_completed and self.doc_memory.has_document_in_flight(
+                user
+            ):
+                if (
+                    is_document_question(text)
+                    or is_document_compare(text)
+                    or _looks_like_doc_followup(text)
+                ):
+                    self.doc_memory.remember_pending_question(user, text)
+                    reply = (
+                        "Still processing your report — I'll answer as soon as it's ready "
+                        "(usually under a minute)."
+                    )
+                    MessageService.save_assistant_message(
+                        conversation,
+                        reply,
+                        metadata={
+                            "onboarding": False,
+                            "pipeline": "document_pending",
+                            "ok": True,
+                            "queued": True,
+                        },
+                    )
+                    return reply
+
             # Live finance BEFORE Sheets — works even mid-onboarding so
             # "Tell me about nvidia price today" never hangs on Gemini.
             from conversation.services.entity_context import EntityContext
@@ -529,7 +633,7 @@ class ConversationProcessor:
                 or is_document_compare(text)
                 or _looks_like_doc_followup(text)
             ):
-                if self.doc_memory.processing_document_ids(user):
+                if self.doc_memory.has_document_in_flight(user):
                     self.doc_memory.remember_pending_question(user, text)
                     reply = (
                         "Still processing your report — I'll answer as soon as it's ready "
@@ -681,7 +785,7 @@ class ConversationProcessor:
 
                 entities = EntityContext()
                 # If a PDF is still processing, queue the question
-                if self.doc_memory.processing_document_ids(user) and (
+                if self.doc_memory.has_document_in_flight(user) and (
                     is_document_question(text)
                     or is_document_compare(text)
                     or _looks_like_doc_followup(text)
@@ -925,7 +1029,8 @@ def _should_defer_sheet_to_documents(
 
     active_docs = list(doc_memory.active_document_ids(user) or [])
     processing = list(doc_memory.processing_document_ids(user) or [])
-    if not active_docs and not processing:
+    ingest_pending = bool(getattr(doc_memory, "is_ingest_pending", lambda _u: False)(user))
+    if not active_docs and not processing and not ingest_pending:
         return False
 
     reportish = bool(
@@ -944,6 +1049,8 @@ def _should_defer_sheet_to_documents(
 
 def _looks_like_doc_followup(text: str) -> bool:
     lower = (text or "").lower()
+    if re.search(r"\banalys[ea]\s+(it|this|that)\b|\banalyze\s+(it|this|that)\b", lower):
+        return True
     return any(
         p in lower
         for p in (
@@ -972,5 +1079,9 @@ def _looks_like_doc_followup(text: str) -> bool:
             "this pdf",
             "this filing",
             "annual report",
+            "analyse it",
+            "analyze it",
+            "analyse this",
+            "analyze this",
         )
     )
