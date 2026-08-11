@@ -17,7 +17,16 @@ _MARKET_CAP = re.compile(
     re.IGNORECASE,
 )
 _PRICE = re.compile(
-    r"\b(share\s*price|stock\s*price|current\s*price|trading\s*at|quote)\b",
+    r"\b("
+    r"share\s*price|stock\s*price|current\s*price|trading\s*at|quote|"
+    r"price\s+today|price\s+now|today'?s\s+price|price\s+of|"
+    r"what(?:'s| is) (?:the )?(?:share |stock )?price|"
+    r"tell me about .{0,50}\bprice\b|"
+    r"how(?:'s| is) .{0,40}\bprice\b|"
+    r"\b(?:nvda|nvidia|amd|aapl|apple|msft|microsoft|tsla|tesla|googl|google|"
+    r"amzn|amazon|meta)\b.{0,20}\bprice\b|"
+    r"\bprice\b.{0,20}\b(?:nvda|nvidia|amd|aapl|apple|msft|microsoft|tsla|tesla)\b"
+    r")\b",
     re.IGNORECASE,
 )
 _PE = re.compile(r"\b(p\s*/\s*e|pe\s*ratio|price[- ]to[- ]earnings)\b", re.IGNORECASE)

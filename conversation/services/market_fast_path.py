@@ -19,7 +19,10 @@ _MOVE = re.compile(
     r"why is .{0,40}\b(up|down|moving|rallying|falling|dropping)|"
     r"what'?s moving|whats moving|why .+ moving|"
     r"market update|quick (?:market )?update|"
-    r"how is .{0,40}\b(trading|doing) today"
+    r"how is .{0,40}\b(trading|doing) today|"
+    r"tell me about .{0,40}\b(price|today|stock|shares?)\b|"
+    r"\b(?:nvda|nvidia|amd|aapl|apple|msft|microsoft|tsla|tesla)\b.{0,30}"
+    r"\b(?:price|today|trading|doing)\b"
     r")\b",
     re.IGNORECASE,
 )

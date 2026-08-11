@@ -108,12 +108,10 @@ class ConversationProcessor:
             except Exception:  # noqa: BLE001
                 pass
 
-            if user.onboarding_completed and not force_reset and not created:
-                reply = self.onboarding.welcome_back(user)
-                event = "welcome_back"
-            else:
-                reply = self.onboarding.start(user, force_reset=True)
-                event = "onboarding_start"
+            # Every /start re-opens the intro with "What best describes you?"
+            # so demos always show the same first-screen experience.
+            reply = self.onboarding.start(user, force_reset=True)
+            event = "onboarding_start"
             MessageService.save_user_message(
                 conversation,
                 "/start",
@@ -376,118 +374,123 @@ class ConversationProcessor:
                 )
                 return reply
 
-            # Live finance BEFORE Sheets — an open spreadsheet must never steal
-            # "What's happening with Nvidia" / market-cap / compare questions.
-            if user.onboarding_completed:
-                from conversation.services.entity_context import EntityContext
-                from conversation.services.finance_fast_path import (
-                    try_finance_fast_answer,
+            # Live finance BEFORE Sheets — works even mid-onboarding so
+            # "Tell me about nvidia price today" never hangs on Gemini.
+            from conversation.services.entity_context import EntityContext
+            from conversation.services.finance_fast_path import (
+                try_finance_fast_answer,
+            )
+            from conversation.services.market_fast_path import (
+                try_market_move_fast_answer,
+            )
+            from finance.utils.ticker_resolve import resolve_symbol, resolve_symbols
+
+            entities = EntityContext()
+            default_sym = entities.resolve_symbol(user, text)
+            market = try_market_move_fast_answer(text, default_symbol=default_sym)
+            if market:
+                if not user.onboarding_completed:
+                    self.onboarding._soft_complete(user)
+                reply = self.orchestrator.formatter.format(market["reply"])
+                metadata = {
+                    "onboarding": False,
+                    **(market.get("metadata") or {}),
+                }
+                MessageService.save_assistant_message(
+                    conversation, reply, metadata=metadata
                 )
-                from conversation.services.market_fast_path import (
-                    try_market_move_fast_answer,
+                sym = (market.get("metadata") or {}).get("symbol")
+                if sym:
+                    entities.remember(user, symbol=str(sym), topic="market")
+                logger.info(
+                    "event=text_ok telegram_id=%s onboarding=%s ai=%s chars=%s",
+                    telegram_id,
+                    False,
+                    True,
+                    len(text),
                 )
-                from finance.utils.ticker_resolve import resolve_symbol, resolve_symbols
+                return reply
 
-                entities = EntityContext()
-                default_sym = entities.resolve_symbol(user, text)
-                market = try_market_move_fast_answer(text, default_symbol=default_sym)
-                if market:
-                    reply = self.orchestrator.formatter.format(market["reply"])
-                    metadata = {
-                        "onboarding": False,
-                        **(market.get("metadata") or {}),
-                    }
-                    MessageService.save_assistant_message(
-                        conversation, reply, metadata=metadata
-                    )
-                    sym = (market.get("metadata") or {}).get("symbol")
-                    if sym:
-                        entities.remember(user, symbol=str(sym), topic="market")
-                    logger.info(
-                        "event=text_ok telegram_id=%s onboarding=%s ai=%s chars=%s",
-                        telegram_id,
-                        False,
-                        True,
-                        len(text),
-                    )
-                    return reply
+            fast = try_finance_fast_answer(text, default_symbol=default_sym)
+            if fast:
+                if not user.onboarding_completed:
+                    self.onboarding._soft_complete(user)
+                reply = self.orchestrator.formatter.format(fast["reply"])
+                metadata = {
+                    "onboarding": False,
+                    **(fast.get("metadata") or {}),
+                }
+                MessageService.save_assistant_message(
+                    conversation, reply, metadata=metadata
+                )
+                sym = (fast.get("metadata") or {}).get("symbol")
+                if sym:
+                    entities.remember(user, symbol=str(sym), topic="finance")
+                logger.info(
+                    "event=text_ok telegram_id=%s onboarding=%s ai=%s chars=%s",
+                    telegram_id,
+                    False,
+                    True,
+                    len(text),
+                )
+                return reply
 
-                fast = try_finance_fast_answer(text, default_symbol=default_sym)
-                if fast:
-                    reply = self.orchestrator.formatter.format(fast["reply"])
-                    metadata = {
-                        "onboarding": False,
-                        **(fast.get("metadata") or {}),
-                    }
-                    MessageService.save_assistant_message(
-                        conversation, reply, metadata=metadata
-                    )
-                    sym = (fast.get("metadata") or {}).get("symbol")
-                    if sym:
-                        entities.remember(user, symbol=str(sym), topic="finance")
-                    logger.info(
-                        "event=text_ok telegram_id=%s onboarding=%s ai=%s chars=%s",
-                        telegram_id,
-                        False,
-                        True,
-                        len(text),
-                    )
-                    return reply
-
-                # Compare tickers without an active-sheet cue → AI research, not Sheets
-                named = resolve_symbols(text) or []
-                one = resolve_symbol(text)
-                if not named and one:
-                    named = [one]
-                # "What about Microsoft? How does it compare" after NVDA/AMD chat
-                if len(named) < 2 and re.search(
+            # Compare tickers without an active-sheet cue → AI research, not Sheets
+            named = resolve_symbols(text) or []
+            one = resolve_symbol(text)
+            if not named and one:
+                named = [one]
+            # "What about Microsoft? How does it compare" after NVDA/AMD chat
+            if len(named) < 2 and re.search(
+                r"\b(compare|vs\.?|versus|compared (to|with)|how does it compare)\b",
+                text,
+                re.I,
+            ):
+                ctx = entities.get(user)
+                prior = (ctx.get("current_ticker") or "").strip().upper()
+                alts = [
+                    str(a).upper()
+                    for a in (ctx.get("alt_tickers") or [])
+                    if a
+                ]
+                for sym in ([prior] + alts):
+                    if sym and sym not in named:
+                        named.append(sym)
+                    if len(named) >= 2:
+                        break
+            if (
+                len(named) >= 2
+                and re.search(
                     r"\b(compare|vs\.?|versus|compared (to|with)|how does it compare)\b",
                     text,
                     re.I,
-                ):
-                    ctx = entities.get(user)
-                    prior = (ctx.get("current_ticker") or "").strip().upper()
-                    alts = [
-                        str(a).upper()
-                        for a in (ctx.get("alt_tickers") or [])
-                        if a
-                    ]
-                    for sym in ([prior] + alts):
-                        if sym and sym not in named:
-                            named.append(sym)
-                        if len(named) >= 2:
-                            break
-                if (
-                    len(named) >= 2
-                    and re.search(
-                        r"\b(compare|vs\.?|versus|compared (to|with)|how does it compare)\b",
-                        text,
-                        re.I,
-                    )
-                    and not re.search(
-                        r"\b(sheet|spreadsheet|portfolio|holding)\b", text, re.I
-                    )
-                ):
-                    ai_result = self.orchestrator.process(user, conversation, text)
-                    reply = ai_result["reply"]
-                    metadata = {"onboarding": False, **(ai_result.get("metadata") or {})}
-                    MessageService.save_assistant_message(
-                        conversation, reply, metadata=metadata
-                    )
-                    entities.remember(
-                        user,
-                        symbol=named[0],
-                        alt_symbols=named[1:],
-                        topic="compare",
-                    )
-                    logger.info(
-                        "event=text_ok telegram_id=%s onboarding=%s ai=%s chars=%s",
-                        telegram_id,
-                        False,
-                        True,
-                        len(text),
-                    )
-                    return reply
+                )
+                and not re.search(
+                    r"\b(sheet|spreadsheet|portfolio|holding)\b", text, re.I
+                )
+            ):
+                if not user.onboarding_completed:
+                    self.onboarding._soft_complete(user)
+                ai_result = self.orchestrator.process(user, conversation, text)
+                reply = ai_result["reply"]
+                metadata = {"onboarding": False, **(ai_result.get("metadata") or {})}
+                MessageService.save_assistant_message(
+                    conversation, reply, metadata=metadata
+                )
+                entities.remember(
+                    user,
+                    symbol=named[0],
+                    alt_symbols=named[1:],
+                    topic="compare",
+                )
+                logger.info(
+                    "event=text_ok telegram_id=%s onboarding=%s ai=%s chars=%s",
+                    telegram_id,
+                    False,
+                    True,
+                    len(text),
+                )
+                return reply
 
             # Active PDF/DOCX Q&A BEFORE Sheets — an open spreadsheet must never
             # steal "give me summary of report" after an upload.
